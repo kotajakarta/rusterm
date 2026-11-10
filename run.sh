@@ -11,7 +11,7 @@ fi
 
 PORT=9095
 FOREGROUND=0
-NO_BROWSER=0
+NO_BROWSER=1
 REBUILD=0
 
 while [ $# -gt 0 ]; do
@@ -22,6 +22,10 @@ while [ $# -gt 0 ]; do
             ;;
         --foreground)
             FOREGROUND=1
+            shift
+            ;;
+        --browser|--open-browser)
+            NO_BROWSER=0
             shift
             ;;
         --no-browser)
@@ -35,10 +39,11 @@ while [ $# -gt 0 ]; do
         -h|--help)
             echo "Usage: ./run.sh [OPTIONS]"
             echo "Options:"
-            echo "  --port <PORT>     Set port (default: 9095)"
-            echo "  --foreground      Run in foreground"
-            echo "  --no-browser      Do not open browser"
-            echo "  --rebuild         Force rebuild of frontend and backend"
+            echo "  --port <PORT>         Set port (default: 9095)"
+            echo "  --foreground          Run in foreground"
+            echo "  --browser             Open browser automatically"
+            echo "  --no-browser          Do not open browser (default)"
+            echo "  --rebuild             Force rebuild of frontend and backend"
             exit 0
             ;;
         *)
