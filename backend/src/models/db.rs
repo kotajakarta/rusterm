@@ -1,4 +1,5 @@
 use crate::models::bookmark::{Bookmark, BookmarkInput};
+use crate::models::files::{FileRemote, FileRemoteInput};
 use crate::models::server::{
     BackupBookmark, BackupPayload, BackupServer, BackupSnippet, BackupStats,
     DecryptedServerCreds, ServerInput, ServerOutput,
@@ -75,6 +76,17 @@ impl DbStore {
                 name TEXT NOT NULL,
                 command TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS file_remotes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                local_server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                local_path TEXT NOT NULL,
+                remote_server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                remote_path TEXT NOT NULL,
+                ignore_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
         )?;
@@ -579,5 +591,200 @@ impl DbStore {
         }
 
         Ok(stats)
+    }
+
+    pub fn list_file_remotes(&self) -> Result<Vec<FileRemote>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, local_server_id, local_path, remote_server_id, remote_path, ignore_json, updated_at
+             FROM file_remotes
+             ORDER BY name ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let ignore_json: String = row.get(6)?;
+            let ignore: Vec<String> = serde_json::from_str(&ignore_json).unwrap_or_default();
+            Ok(FileRemote {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                local_server_id: row.get(2)?,
+                local_path: row.get(3)?,
+                remote_server_id: row.get(4)?,
+                remote_path: row.get(5)?,
+                ignore,
+                updated_at: row.get(7)?,
+            })
+        })?;
+
+        let mut remotes = Vec::new();
+        for r in rows {
+            remotes.push(r?);
+        }
+        Ok(remotes)
+    }
+
+    pub fn get_file_remote(&self, id: i64) -> Result<Option<FileRemote>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, local_server_id, local_path, remote_server_id, remote_path, ignore_json, updated_at
+             FROM file_remotes
+             WHERE id = ?1",
+        )?;
+
+        let mut rows = stmt.query_map([id], |row| {
+            let ignore_json: String = row.get(6)?;
+            let ignore: Vec<String> = serde_json::from_str(&ignore_json).unwrap_or_default();
+            Ok(FileRemote {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                local_server_id: row.get(2)?,
+                local_path: row.get(3)?,
+                remote_server_id: row.get(4)?,
+                remote_path: row.get(5)?,
+                ignore,
+                updated_at: row.get(7)?,
+            })
+        })?;
+
+        if let Some(res) = rows.next() {
+            Ok(Some(res?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn create_file_remote(&self, input: &FileRemoteInput) -> Result<FileRemote, DbError> {
+        let conn = self.pool.get()?;
+        let ignore_json = serde_json::to_string(&input.ignore).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO file_remotes (name, local_server_id, local_path, remote_server_id, remote_path, ignore_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                input.name,
+                input.local_server_id,
+                input.local_path,
+                input.remote_server_id,
+                input.remote_path,
+                ignore_json,
+            ],
+        )?;
+        let id = conn.last_insert_rowid();
+        self.get_file_remote(id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn update_file_remote(&self, id: i64, input: &FileRemoteInput) -> Result<FileRemote, DbError> {
+        let conn = self.pool.get()?;
+        let ignore_json = serde_json::to_string(&input.ignore).unwrap_or_else(|_| "[]".to_string());
+        let count = conn.execute(
+            "UPDATE file_remotes
+             SET name = ?1, local_server_id = ?2, local_path = ?3, remote_server_id = ?4, remote_path = ?5, ignore_json = ?6, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?7",
+            params![
+                input.name,
+                input.local_server_id,
+                input.local_path,
+                input.remote_server_id,
+                input.remote_path,
+                ignore_json,
+                id,
+            ],
+        )?;
+        if count == 0 {
+            return Err(DbError::NotFound);
+        }
+        self.get_file_remote(id)?.ok_or(DbError::NotFound)
+    }
+
+    pub fn delete_file_remote(&self, id: i64) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let count = conn.execute("DELETE FROM file_remotes WHERE id = ?1", params![id])?;
+        if count == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn list_file_bookmark_paths(&self, server_id: i64) -> Result<Vec<String>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT path FROM bookmarks WHERE server_id = ?1 ORDER BY path ASC",
+        )?;
+        let rows = stmt.query_map([server_id], |row| row.get::<_, String>(0))?;
+        let mut paths = Vec::new();
+        for r in rows {
+            paths.push(r?);
+        }
+        Ok(paths)
+    }
+
+    pub fn toggle_file_bookmark(&self, server_id: i64, path: &str) -> Result<bool, DbError> {
+        let conn = self.pool.get()?;
+        let clean_path = if path.len() > 1 && path.ends_with('/') {
+            path.trim_end_matches('/').to_string()
+        } else {
+            path.to_string()
+        };
+
+        let existing_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM bookmarks WHERE server_id = ?1 AND path = ?2",
+                params![server_id, clean_path],
+                |r| r.get(0),
+            )
+            .rusqlite_to_option()?;
+
+        if let Some(id) = existing_id {
+            conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
+            Ok(false) // removed
+        } else {
+            let name = std::path::Path::new(&clean_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(if clean_path == "/" { "/" } else { "folder" });
+            conn.execute(
+                "INSERT INTO bookmarks (server_id, name, path, startup_cmd) VALUES (?1, ?2, ?3, '')",
+                params![server_id, name, clean_path],
+            )?;
+            Ok(true) // added
+        }
+    }
+
+    pub fn sync_file_bookmarks(&self, server_id: i64, paths: &[String]) -> Result<Vec<String>, DbError> {
+        let conn = self.pool.get()?;
+        let existing = self.list_file_bookmark_paths(server_id)?;
+        let existing_set: std::collections::HashSet<String> = existing.into_iter().collect();
+
+        for p in paths {
+            let clean = if p.len() > 1 && p.ends_with('/') {
+                p.trim_end_matches('/').to_string()
+            } else {
+                p.to_string()
+            };
+            if !existing_set.contains(&clean) {
+                let name = std::path::Path::new(&clean)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(if clean == "/" { "/" } else { "folder" });
+                conn.execute(
+                    "INSERT INTO bookmarks (server_id, name, path, startup_cmd) VALUES (?1, ?2, ?3, '')",
+                    params![server_id, name, clean],
+                )?;
+            }
+        }
+        self.list_file_bookmark_paths(server_id)
+    }
+}
+
+trait RusqliteOptionExt<T> {
+    fn rusqlite_to_option(self) -> Result<Option<T>, rusqlite::Error>;
+}
+
+impl<T> RusqliteOptionExt<T> for Result<T, rusqlite::Error> {
+    fn rusqlite_to_option(self) -> Result<Option<T>, rusqlite::Error> {
+        match self {
+            Ok(val) => Ok(Some(val)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }

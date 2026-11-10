@@ -206,3 +206,93 @@ async fn test_db_backup_export_and_import() {
     assert_eq!(db2_snippets.len(), 1);
     assert_eq!(db2_snippets[0].name, "Uptime");
 }
+
+#[tokio::test]
+async fn test_db_file_remotes_and_bookmarks() {
+    use xterm_backend::models::files::FileRemoteInput;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test_files.sqlite");
+    let vault_file = dir.path().join("vault.json");
+    let vault = Vault::new(&vault_file).await.unwrap();
+    let _ = vault.setup_pin("123456").await.unwrap();
+    let kek = vault.get_kek().await.unwrap();
+    let db = DbStore::new(&db_path).unwrap();
+
+    let s1 = db.create_server(&ServerInput {
+        name: "S1".into(),
+        host: "1.1.1.1".into(),
+        port: 22,
+        username: "root".into(),
+        auth_type: "password".into(),
+        password: Some("p".into()),
+        private_key: None,
+        passphrase: None,
+        group_name: "".into(),
+        color: "".into(),
+    }, &kek).unwrap();
+
+    let s2 = db.create_server(&ServerInput {
+        name: "S2".into(),
+        host: "2.2.2.2".into(),
+        port: 22,
+        username: "root".into(),
+        auth_type: "password".into(),
+        password: Some("p".into()),
+        private_key: None,
+        passphrase: None,
+        group_name: "".into(),
+        color: "".into(),
+    }, &kek).unwrap();
+
+    // 1. Create file remote
+    let remote_in = FileRemoteInput {
+        name: "Sync Web".into(),
+        local_server_id: s1,
+        local_path: "/var/www/html".into(),
+        remote_server_id: s2,
+        remote_path: "/backup/html".into(),
+        ignore: vec![".git".into(), "node_modules".into()],
+    };
+    let remote = db.create_file_remote(&remote_in).unwrap();
+    assert!(remote.id > 0);
+    assert_eq!(remote.name, "Sync Web");
+    assert_eq!(remote.ignore.len(), 2);
+
+    // 2. List remotes
+    let list = db.list_file_remotes().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, remote.id);
+
+    // 3. Update remote
+    let updated_in = FileRemoteInput {
+        name: "Sync Web Updated".into(),
+        local_server_id: s1,
+        local_path: "/var/www/html".into(),
+        remote_server_id: s2,
+        remote_path: "/backup/html2".into(),
+        ignore: vec![".git".into()],
+    };
+    let updated = db.update_file_remote(remote.id, &updated_in).unwrap();
+    assert_eq!(updated.name, "Sync Web Updated");
+    assert_eq!(updated.remote_path, "/backup/html2");
+    assert_eq!(updated.ignore.len(), 1);
+
+    // 4. File bookmarks toggle and sync
+    let b1 = db.toggle_file_bookmark(s1, "/var/log").unwrap();
+    assert!(b1); // added
+    let paths = db.list_file_bookmark_paths(s1).unwrap();
+    assert_eq!(paths, vec!["/var/log"]);
+
+    let b2 = db.toggle_file_bookmark(s1, "/var/log").unwrap();
+    assert!(!b2); // toggled off
+    assert!(db.list_file_bookmark_paths(s1).unwrap().is_empty());
+
+    // Sync multiple bookmarks
+    let synced = db.sync_file_bookmarks(s1, &["/etc/nginx".into(), "/var/www".into()]).unwrap();
+    assert_eq!(synced.len(), 2);
+
+    // 5. Delete remote
+    db.delete_file_remote(remote.id).unwrap();
+    assert!(db.list_file_remotes().unwrap().is_empty());
+}
