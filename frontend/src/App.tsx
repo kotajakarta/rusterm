@@ -739,7 +739,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             type="button"
             className="icon-btn"
             onClick={() => setDialog({ kind: "update" })}
-            title="Pembaruan Aplikasi dari GitHub"
+            title="Pembaruan Aplikasi (GitHub: kotajakarta/rusterm)"
             aria-label="Pembaruan Aplikasi"
           >
             <Icon name="refresh" size={15} />
