@@ -63,3 +63,61 @@ fn test_normalize_container_item_podman() {
     assert_eq!(item.ports[0].host_ip.as_deref(), Some("127.0.0.1"));
     assert_eq!(item.ports[0].host_port, Some(6379));
 }
+
+#[tokio::test]
+async fn test_containers_router_auth() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+    use xterm_backend::controllers::containers;
+    use xterm_backend::controllers::servers::AppState;
+    use xterm_backend::models::db::DbStore;
+    use xterm_backend::services::ssh_pool::SshPool;
+    use xterm_backend::services::vault::Vault;
+
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("containers_test.sqlite");
+    let vault_path = dir.path().join("vault.json");
+
+    let vault = Vault::new(&vault_path).await.unwrap();
+    let session = vault.setup_pin("123456").await.unwrap();
+    let db = DbStore::new(&db_path).unwrap();
+    let pool = SshPool::new();
+
+    let app_state = AppState {
+        db: db.clone(),
+        vault: vault.clone(),
+        pool,
+    };
+
+    let app = axum::Router::new().nest("/api", containers::router(app_state));
+
+    // 1. Unauthorized request
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/containers/engine?server_id=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // 2. Authorized request for non-existent server (expect 404 NOT_FOUND)
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/containers/engine?server_id=999")
+                .header("X-Session", &session)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+

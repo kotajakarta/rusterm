@@ -6,4 +6,5 @@ pub mod terminal_ws;
 pub mod static_files;
 pub mod config;
 pub mod files;
+pub mod containers;
 
