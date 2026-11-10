@@ -126,6 +126,14 @@ pub enum SshError {
     Io(#[from] std::io::Error),
     #[error("Key parse error: {0}")]
     KeyParse(String),
+    #[error("Agent error: {0}")]
+    AgentError(String),
+}
+
+pub const FILES_AGENT_SRC: &str = include_str!("../files_agent.py");
+
+pub fn build_agent_command() -> String {
+    format!("python3 -c '{}'", FILES_AGENT_SRC.replace('\'', "'\\''"))
 }
 
 pub struct SimpleClientHandler;
@@ -294,5 +302,73 @@ impl SshPool {
             .map_err(|_| SshError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "Command timed out")))?;
 
         Ok(String::from_utf8_lossy(&output).to_string())
+    }
+
+    pub async fn run_command_with_stdin(
+        &self,
+        creds: &DecryptedServerCreds,
+        cmd: &str,
+        stdin_data: &[u8],
+        timeout_secs: u64,
+    ) -> Result<Vec<u8>, SshError> {
+        let session = self.get_or_connect(creds).await?;
+        let mut channel = {
+            let handle = session.handle.lock().await;
+            handle.channel_open_session().await?
+        };
+
+        channel.exec(true, cmd).await?;
+        if !stdin_data.is_empty() {
+            channel.data(stdin_data).await?;
+        }
+        channel.eof().await?;
+
+        let mut output = Vec::new();
+        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        let read_fut = async {
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { ref data } => {
+                        output.extend_from_slice(data);
+                    }
+                    russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                        output.extend_from_slice(data);
+                    }
+                    russh::ChannelMsg::ExitStatus { .. } | russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+        };
+
+        tokio::time::timeout(timeout_duration, read_fut)
+            .await
+            .map_err(|_| SshError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "Command timed out")))?;
+
+        Ok(output)
+    }
+
+    pub async fn run_agent(
+        &self,
+        creds: &DecryptedServerCreds,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, SshError> {
+        let cmd = build_agent_command();
+        let stdin_bytes = serde_json::to_vec(payload)
+            .map_err(|e| SshError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
+        let out_bytes = self.run_command_with_stdin(creds, &cmd, &stdin_bytes, 60).await?;
+        let out_str = String::from_utf8_lossy(&out_bytes);
+        let parsed: serde_json::Value = serde_json::from_str(out_str.trim()).map_err(|e| {
+            SshError::AgentError(format!("Failed to parse agent output: {}. Raw: {}", e, out_str))
+        })?;
+
+        if parsed.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            Ok(parsed.get("result").cloned().unwrap_or(serde_json::Value::Null))
+        } else {
+            let err_msg = parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("File agent operation failed");
+            Err(SshError::AgentError(err_msg.to_string()))
+        }
     }
 }

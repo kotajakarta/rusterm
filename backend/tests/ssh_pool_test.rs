@@ -74,3 +74,16 @@ MemAvailable:    8192000 kB
     assert_eq!(stats.disk_total, Some(104857600 * 1024));
     assert_eq!(stats.disk_used, Some(52428800 * 1024));
 }
+
+#[test]
+fn test_files_agent_source_and_command() {
+    use xterm_backend::services::ssh_pool::{build_agent_command, FILES_AGENT_SRC};
+
+    assert!(!FILES_AGENT_SRC.is_empty());
+    assert!(FILES_AGENT_SRC.contains("File-manager agent"));
+    assert!(FILES_AGENT_SRC.contains("MAX_READ_BYTES"));
+
+    let cmd = build_agent_command();
+    assert!(cmd.starts_with("python3 -c '"));
+    assert!(cmd.ends_with('\''));
+}
