@@ -40,6 +40,8 @@ russh = "0.45"
 russh-keys = "0.45"
 
 # Utilities & System
+rust-embed = "8.5"
+mime_guess = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "5.0"
