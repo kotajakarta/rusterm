@@ -1,0 +1,208 @@
+use xterm_backend::models::db::DbStore;
+use xterm_backend::models::server::ServerInput;
+use xterm_backend::services::vault::Vault;
+use tempfile::tempdir;
+
+#[tokio::test]
+async fn test_db_server_crud_and_encryption() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.sqlite");
+    let vault_file = dir.path().join("vault.json");
+
+    let vault = Vault::new(&vault_file).await.unwrap();
+    let _session = vault.setup_pin("123456").await.unwrap();
+    let kek = vault.get_kek().await.unwrap();
+
+    let db = DbStore::new(&db_path).unwrap();
+
+    // 1. Create server
+    let input = ServerInput {
+        name: "Production Server".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 22,
+        username: "root".to_string(),
+        auth_type: "password".to_string(),
+        password: Some("my-ssh-password".to_string()),
+        private_key: None,
+        passphrase: None,
+        group_name: "Web".to_string(),
+        color: "#ff0000".to_string(),
+    };
+
+    let server_id = db.create_server(&input, &kek).unwrap();
+    assert!(server_id > 0);
+
+    // 2. List servers (secrets masked/bools)
+    let list = db.list_servers().unwrap();
+    assert_eq!(list.len(), 1);
+    let s = &list[0];
+    assert_eq!(s.id, server_id);
+    assert_eq!(s.name, "Production Server");
+    assert!(s.has_password);
+    assert!(!s.has_private_key);
+
+    // 3. Get server credentials (unmasked with KEK)
+    let creds = db.get_server_credentials(server_id, &kek).unwrap();
+    assert_eq!(creds.password.as_deref(), Some("my-ssh-password"));
+
+    // 4. Update server without changing password
+    let update_input = ServerInput {
+        name: "Production Server Renamed".to_string(),
+        host: "192.168.1.100".to_string(),
+        port: 2222,
+        username: "admin".to_string(),
+        auth_type: "password".to_string(),
+        password: None, // keep existing password
+        private_key: None,
+        passphrase: None,
+        group_name: "Web".to_string(),
+        color: "#ff0000".to_string(),
+    };
+    db.update_server(server_id, &update_input, &kek).unwrap();
+
+    let creds = db.get_server_credentials(server_id, &kek).unwrap();
+    assert_eq!(creds.password.as_deref(), Some("my-ssh-password"));
+    assert_eq!(creds.port, 2222);
+    assert_eq!(creds.username, "admin");
+
+    // 5. Delete server
+    db.delete_server(server_id).unwrap();
+    assert!(db.list_servers().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_reorder_servers() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test_reorder.sqlite");
+    let vault_file = dir.path().join("vault.json");
+
+    let vault = Vault::new(&vault_file).await.unwrap();
+    let _session = vault.setup_pin("123456").await.unwrap();
+    let kek = vault.get_kek().await.unwrap();
+    let db = DbStore::new(&db_path).unwrap();
+
+    let s1 = db
+        .create_server(
+            &ServerInput {
+                name: "Server 1".into(),
+                host: "10.0.0.1".into(),
+                port: 22,
+                username: "u1".into(),
+                auth_type: "password".into(),
+                password: Some("p1".into()),
+                private_key: None,
+                passphrase: None,
+                group_name: "G".into(),
+                color: "".into(),
+            },
+            &kek,
+        )
+        .unwrap();
+
+    let s2 = db
+        .create_server(
+            &ServerInput {
+                name: "Server 2".into(),
+                host: "10.0.0.2".into(),
+                port: 22,
+                username: "u2".into(),
+                auth_type: "password".into(),
+                password: Some("p2".into()),
+                private_key: None,
+                passphrase: None,
+                group_name: "G".into(),
+                color: "".into(),
+            },
+            &kek,
+        )
+        .unwrap();
+
+    let list = db.list_servers().unwrap();
+    assert_eq!(list[0].id, s1);
+    assert_eq!(list[1].id, s2);
+
+    // Reorder: s2 before s1
+    db.reorder_servers(&[s2, s1]).unwrap();
+
+    let list_after = db.list_servers().unwrap();
+    assert_eq!(list_after[0].id, s2);
+    assert_eq!(list_after[1].id, s1);
+}
+
+#[tokio::test]
+async fn test_db_backup_export_and_import() {
+    use xterm_backend::models::bookmark::BookmarkInput;
+    use xterm_backend::models::snippet::SnippetInput;
+
+    let dir = tempdir().unwrap();
+    let db1_path = dir.path().join("db1.sqlite");
+    let db2_path = dir.path().join("db2.sqlite");
+    let vault_file = dir.path().join("vault.json");
+
+    let vault = Vault::new(&vault_file).await.unwrap();
+    let _session = vault.setup_pin("123456").await.unwrap();
+    let kek = vault.get_kek().await.unwrap();
+
+    let db1 = DbStore::new(&db1_path).unwrap();
+
+    let srv_id = db1
+        .create_server(
+            &ServerInput {
+                name: "Production".into(),
+                host: "10.0.0.50".into(),
+                port: 22,
+                username: "ubuntu".into(),
+                auth_type: "password".into(),
+                password: Some("securepass".into()),
+                private_key: None,
+                passphrase: None,
+                group_name: "Cloud".into(),
+                color: "#10b981".into(),
+            },
+            &kek,
+        )
+        .unwrap();
+
+    db1.create_bookmark(&BookmarkInput {
+        server_id: srv_id,
+        name: "Logs".into(),
+        path: "/var/log".into(),
+        startup_cmd: "tail -f syslog".into(),
+    })
+    .unwrap();
+
+    db1.create_snippet(&SnippetInput {
+        name: "Uptime".into(),
+        command: "uptime".into(),
+    })
+    .unwrap();
+
+    // Export from db1
+    let backup_payload = db1.export_backup_data(&kek).unwrap();
+    assert_eq!(backup_payload.servers.len(), 1);
+    assert_eq!(backup_payload.servers[0].bookmarks.len(), 1);
+    assert_eq!(backup_payload.snippets.len(), 1);
+
+    // Import into db2
+    let db2 = DbStore::new(&db2_path).unwrap();
+    let stats = db2.import_backup_data(&backup_payload, &kek).unwrap();
+    assert_eq!(stats.servers_added, 1);
+    assert_eq!(stats.bookmarks_added, 1);
+    assert_eq!(stats.snippets_added, 1);
+
+    // Verify imported data in db2
+    let db2_servers = db2.list_servers().unwrap();
+    assert_eq!(db2_servers.len(), 1);
+    assert_eq!(db2_servers[0].name, "Production");
+
+    let db2_creds = db2.get_server_credentials(db2_servers[0].id, &kek).unwrap();
+    assert_eq!(db2_creds.password.as_deref(), Some("securepass"));
+
+    let db2_bms = db2.list_bookmarks().unwrap();
+    assert_eq!(db2_bms.len(), 1);
+    assert_eq!(db2_bms[0].name, "Logs");
+
+    let db2_snippets = db2.list_snippets().unwrap();
+    assert_eq!(db2_snippets.len(), 1);
+    assert_eq!(db2_snippets[0].name, "Uptime");
+}

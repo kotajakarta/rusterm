@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>TermDeck</title>
+  <rect width="32" height="32" rx="7" fill="#e8a33d"/>
+  <g fill="none" stroke="#231705" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 9.5l5.5 5.5L6 20.5"/>
+    <path d="M15.5 9.5l9 11M24.5 9.5l-9 11"/>
+    <path d="M15 25.5h10.5"/>
+  </g>
+</svg>
