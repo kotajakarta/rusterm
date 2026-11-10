@@ -85,6 +85,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::subscriber::set_global_default(subscriber).ok();
     }
 
+    // Check if an existing TermDeck instance is already running on this port
+    if app_launcher::check_existing_instance(port).await {
+        info!("Instans TermDeck lain sudah aktif di port {}. Membuka jendela aplikasi dan keluar.", port);
+        if !no_browser {
+            app_launcher::launch_app_window(port, &base_data_dir);
+        }
+        return Ok(());
+    }
+
     let vault_path = base_data_dir.join("vault.json");
     let db_path = base_data_dir.join("xterm.sqlite");
 

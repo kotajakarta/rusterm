@@ -13,3 +13,9 @@ fn test_build_app_args() {
     assert!(args.contains(&"--disable-features=msStartupBoost".to_string()));
     assert!(args.iter().any(|a| a.starts_with("--user-data-dir=")));
 }
+
+#[tokio::test]
+async fn test_check_existing_instance_non_running_port() {
+    let is_running = xterm_backend::services::app_launcher::check_existing_instance(59123).await;
+    assert!(!is_running);
+}

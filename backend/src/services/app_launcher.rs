@@ -12,6 +12,15 @@ pub fn build_app_args(port: u16, profile_dir: &Path) -> Vec<String> {
     ]
 }
 
+pub async fn check_existing_instance(port: u16) -> bool {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(600))
+        .build()
+        .unwrap_or_default();
+    let url = format!("http://127.0.0.1:{}/api/auth/status", port);
+    client.get(&url).send().await.is_ok()
+}
+
 pub fn find_browser_executable() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
