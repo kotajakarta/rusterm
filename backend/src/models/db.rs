@@ -1,4 +1,5 @@
 use crate::models::bookmark::{Bookmark, BookmarkInput};
+use crate::models::cloudflare::CFAccount;
 use crate::models::files::{FileRemote, FileRemoteInput};
 use crate::models::server::{
     BackupBookmark, BackupPayload, BackupServer, BackupSnippet, BackupStats,
@@ -87,6 +88,15 @@ impl DbStore {
                 remote_path TEXT NOT NULL,
                 ignore_json TEXT NOT NULL DEFAULT '[]',
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS cf_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                token TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                account_name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
         )?;
@@ -772,6 +782,120 @@ impl DbStore {
             }
         }
         self.list_file_bookmark_paths(server_id)
+    }
+
+    pub fn list_cf_accounts(&self) -> Result<Vec<CFAccount>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, token, account_id, account_name, created_at
+             FROM cf_accounts
+             ORDER BY name ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let token: String = row.get(2)?;
+            let token_masked = if token.len() <= 8 {
+                "••••••••".to_string()
+            } else {
+                format!("{}••••{}", &token[..4], &token[token.len() - 4..])
+            };
+            Ok(CFAccount {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                token_masked,
+                account_id: row.get(3)?,
+                account_name: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn get_cf_account(&self, id: i64) -> Result<Option<(CFAccount, String)>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, token, account_id, account_name, created_at
+             FROM cf_accounts
+             WHERE id = ?1",
+        )?;
+
+        let mut rows = stmt.query_map([id], |row| {
+            let token: String = row.get(2)?;
+            let token_masked = if token.len() <= 8 {
+                "••••••••".to_string()
+            } else {
+                format!("{}••••{}", &token[..4], &token[token.len() - 4..])
+            };
+            let acc = CFAccount {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                token_masked,
+                account_id: row.get(3)?,
+                account_name: row.get(4)?,
+                created_at: row.get(5)?,
+            };
+            Ok((acc, token))
+        })?;
+
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn create_cf_account(
+        &self,
+        name: &str,
+        token: &str,
+        account_id: &str,
+        account_name: &str,
+    ) -> Result<CFAccount, DbError> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "INSERT INTO cf_accounts (name, token, account_id, account_name)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![name, token, account_id, account_name],
+        )?;
+        let id = conn.last_insert_rowid();
+        let (acc, _) = self.get_cf_account(id)?.ok_or(DbError::NotFound)?;
+        Ok(acc)
+    }
+
+    pub fn update_cf_account(
+        &self,
+        id: i64,
+        name: &str,
+        token: Option<&str>,
+    ) -> Result<CFAccount, DbError> {
+        let conn = self.pool.get()?;
+        if let Some(tok) = token {
+            conn.execute(
+                "UPDATE cf_accounts SET name = ?1, token = ?2 WHERE id = ?3",
+                params![name, tok, id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE cf_accounts SET name = ?1 WHERE id = ?2",
+                params![name, id],
+            )?;
+        }
+        let (acc, _) = self.get_cf_account(id)?.ok_or(DbError::NotFound)?;
+        Ok(acc)
+    }
+
+    pub fn delete_cf_account(&self, id: i64) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let count = conn.execute("DELETE FROM cf_accounts WHERE id = ?1", params![id])?;
+        if count == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
     }
 }
 

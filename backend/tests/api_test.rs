@@ -296,3 +296,40 @@ async fn test_db_file_remotes_and_bookmarks() {
     db.delete_file_remote(remote.id).unwrap();
     assert!(db.list_file_remotes().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn test_db_cf_accounts() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test_cf.sqlite");
+    let db = DbStore::new(&db_path).unwrap();
+
+    // 1. Create account
+    let acc = db
+        .create_cf_account("My CF", "abcdef1234567890xyz", "acc_id_1", "Personal")
+        .unwrap();
+    assert_eq!(acc.name, "My CF");
+    assert_eq!(acc.account_id, "acc_id_1");
+    assert_eq!(acc.account_name, "Personal");
+    assert!(acc.token_masked.contains("••••"));
+
+    // 2. List accounts
+    let list = db.list_cf_accounts().unwrap();
+    assert_eq!(list.len(), 1);
+
+    // 3. Get account with secret token
+    let (acc_get, token) = db.get_cf_account(acc.id).unwrap().unwrap();
+    assert_eq!(acc_get.id, acc.id);
+    assert_eq!(token, "abcdef1234567890xyz");
+
+    // 4. Update account
+    let updated = db
+        .update_cf_account(acc.id, "My CF Renamed", Some("newtoken12345678"))
+        .unwrap();
+    assert_eq!(updated.name, "My CF Renamed");
+    let (_, new_tok) = db.get_cf_account(acc.id).unwrap().unwrap();
+    assert_eq!(new_tok, "newtoken12345678");
+
+    // 5. Delete account
+    db.delete_cf_account(acc.id).unwrap();
+    assert!(db.list_cf_accounts().unwrap().is_empty());
+}
