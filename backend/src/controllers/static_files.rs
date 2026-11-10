@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use rust_embed::RustEmbed;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(RustEmbed)]
 #[folder = "../frontend/dist"]
@@ -69,25 +69,47 @@ async fn static_fallback_handler(
 ) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');
 
-    // 1. Try disk if file exists in dist_dir
-    let disk_file = config.dist_dir.join(path);
-    if disk_file.is_file() {
-        if let Ok(bytes) = tokio::fs::read(&disk_file).await {
-            let mime = mime_guess::from_path(&disk_file).first_or_octet_stream();
-            return Response::builder()
-                .header(header::CONTENT_TYPE, mime.as_ref())
-                .body(Body::from(bytes))
-                .unwrap();
+    // Security check: block path traversal attempts
+    let rel_path = Path::new(path);
+    if rel_path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::from("403 Forbidden"))
+            .unwrap();
+    }
+
+    // 1. Try disk if file exists in dist_dir (enforce canonical bounds)
+    if let Ok(canonical_dist) = config.dist_dir.canonicalize() {
+        let candidate = config.dist_dir.join(path);
+        if let Ok(canonical_file) = candidate.canonicalize() {
+            if canonical_file.starts_with(&canonical_dist) && canonical_file.is_file() {
+                if let Ok(bytes) = tokio::fs::read(&canonical_file).await {
+                    let mime = mime_guess::from_path(&canonical_file).first_or_octet_stream();
+                    let mut builder = Response::builder()
+                        .header(header::CONTENT_TYPE, mime.as_ref());
+                    if path.starts_with("assets/") {
+                        builder = builder.header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+                    }
+                    return builder.body(Body::from(bytes)).unwrap();
+                }
+            } else if !canonical_file.starts_with(&canonical_dist) {
+                return Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(Body::from("403 Forbidden"))
+                    .unwrap();
+            }
         }
     }
 
-    // 2. Try embedded assets
+    // 2. Try embedded assets (zero-copy static memory)
     if let Some(asset) = EmbeddedAssets::get(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
-        return Response::builder()
-            .header(header::CONTENT_TYPE, mime.as_ref())
-            .body(Body::from(asset.data.into_owned()))
-            .unwrap();
+        let mut builder = Response::builder()
+            .header(header::CONTENT_TYPE, mime.as_ref());
+        if path.starts_with("assets/") {
+            builder = builder.header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+        }
+        return builder.body(Body::from(asset.data)).unwrap();
     }
 
     // 3. SPA fallback: if request doesn't look like a file with extension, serve index.html

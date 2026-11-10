@@ -164,7 +164,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(ws_router)
         .merge(static_router);
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+    let listener = match TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            info!("Port {} sudah digunakan oleh instans lain. Membuka jendela aplikasi dan keluar secara bersih.", port);
+            if !no_browser {
+                app_launcher::launch_app_window(port, &base_data_dir);
+            }
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
     info!("Server listening on http://localhost:{}", port);
 
     // Launch standalone browser window if requested

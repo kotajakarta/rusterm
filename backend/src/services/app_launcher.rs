@@ -18,7 +18,10 @@ pub async fn check_existing_instance(port: u16) -> bool {
         .build()
         .unwrap_or_default();
     let url = format!("http://127.0.0.1:{}/api/auth/status", port);
-    client.get(&url).send().await.is_ok()
+    match client.get(&url).send().await {
+        Ok(res) => res.status().is_success(),
+        Err(_) => false,
+    }
 }
 
 pub fn find_browser_executable() -> Option<PathBuf> {
@@ -26,18 +29,20 @@ pub fn find_browser_executable() -> Option<PathBuf> {
     {
         let prog_files = std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
         let prog_files_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".to_string());
-        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let local_app_data = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("C:\\Users\\Default\\AppData\\Local"));
 
         let candidates = [
             // 1. Edge
             PathBuf::from(&prog_files_x86).join("Microsoft\\Edge\\Application\\msedge.exe"),
             PathBuf::from(&prog_files).join("Microsoft\\Edge\\Application\\msedge.exe"),
+            local_app_data.join("Microsoft\\Edge\\Application\\msedge.exe"),
             // 2. Chrome
             PathBuf::from(&prog_files).join("Google\\Chrome\\Application\\chrome.exe"),
             PathBuf::from(&prog_files_x86).join("Google\\Chrome\\Application\\chrome.exe"),
-            PathBuf::from(&local_app_data).join("Google\\Chrome\\Application\\chrome.exe"),
+            local_app_data.join("Google\\Chrome\\Application\\chrome.exe"),
             // 3. Brave
             PathBuf::from(&prog_files).join("BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+            local_app_data.join("BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
         ];
 
         for c in &candidates {
@@ -96,7 +101,7 @@ pub fn launch_app_window(port: u16, data_dir: &Path) -> bool {
         info!("Browser Chromium tidak ditemukan, membuka URL di browser default: {}", url);
         #[cfg(target_os = "windows")]
         {
-            let _ = Command::new("cmd").args(&["/c", "start", &url]).spawn();
+            let _ = Command::new("cmd").args(&["/c", "start", "", &url]).spawn();
         }
         #[cfg(not(target_os = "windows"))]
         {

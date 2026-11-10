@@ -37,3 +37,23 @@ async fn test_embedded_asset_serving_and_token_injection() {
     assert!(body.contains(r#"<meta name="termdeck-token" content="embedded_test_token_12345">"#));
     assert!(body.contains("<title>TermDeck</title>"));
 }
+
+#[tokio::test]
+async fn test_path_traversal_is_blocked() {
+    let app = router(StaticConfig {
+        dist_dir: PathBuf::from("."),
+        token: "test_token".to_string(),
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/assets/../Cargo.toml")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
