@@ -6,9 +6,11 @@ use xterm_backend::controllers::servers::AppState;
 use xterm_backend::controllers::static_files::StaticConfig;
 use xterm_backend::controllers::terminal_ws::WsAppState;
 use xterm_backend::controllers::{
-    auth, bookmarks, config, containers, files, servers, snippets, static_files, terminal_ws,
+    auth, bookmarks, cloudflare, config, containers, files, servers, snippets, static_files,
+    terminal_ws,
 };
 use xterm_backend::models::db::DbStore;
+use xterm_backend::services::cloudflare::CloudflareClient;
 use xterm_backend::services::ssh_pool::SshPool;
 use xterm_backend::services::vault::Vault;
 
@@ -82,10 +84,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = DbStore::new(&db_path)?;
     let ssh_pool = SshPool::new();
 
+    let cf_client = CloudflareClient::new();
+
     let app_state = AppState {
         db: db.clone(),
         vault: vault.clone(),
         pool: ssh_pool.clone(),
+        cf: cf_client,
     };
 
     let ws_state = WsAppState {
@@ -114,7 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", snippets::router(app_state.clone()))
         .nest("/api", config::router(app_state.clone()))
         .nest("/api", files::router(app_state.clone()))
-        .nest("/api", containers::router(app_state.clone()));
+        .nest("/api", containers::router(app_state.clone()))
+        .nest("/api", cloudflare::router(app_state.clone()));
 
     let ws_router = terminal_ws::router(ws_state);
     let static_router = static_files::router(static_config);

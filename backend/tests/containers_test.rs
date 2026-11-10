@@ -73,6 +73,7 @@ async fn test_containers_router_auth() {
     use xterm_backend::controllers::containers;
     use xterm_backend::controllers::servers::AppState;
     use xterm_backend::models::db::DbStore;
+    use xterm_backend::services::cloudflare::CloudflareClient;
     use xterm_backend::services::ssh_pool::SshPool;
     use xterm_backend::services::vault::Vault;
 
@@ -89,6 +90,7 @@ async fn test_containers_router_auth() {
         db: db.clone(),
         vault: vault.clone(),
         pool,
+        cf: CloudflareClient::new(),
     };
 
     let app = axum::Router::new().nest("/api", containers::router(app_state));

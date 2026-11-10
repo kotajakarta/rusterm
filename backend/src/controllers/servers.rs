@@ -3,6 +3,7 @@ use crate::models::server::{
     ConnectionCheck, DecryptedServerCreds, ServerInput, ServerOutput, ServerStats,
     TestServerInput,
 };
+use crate::services::cloudflare::CloudflareClient;
 use crate::services::ssh_pool::{parse_stats, SshPool, STATS_SCRIPT};
 use crate::services::vault::Vault;
 use axum::{
@@ -18,6 +19,7 @@ pub struct AppState {
     pub db: DbStore,
     pub vault: Vault,
     pub pool: SshPool,
+    pub cf: CloudflareClient,
 }
 
 #[derive(Deserialize)]

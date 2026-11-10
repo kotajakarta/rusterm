@@ -7,6 +7,7 @@ use xterm_backend::controllers::servers::AppState;
 use xterm_backend::models::db::DbStore;
 use xterm_backend::models::files::FileRemoteInput;
 use xterm_backend::models::server::ServerInput;
+use xterm_backend::services::cloudflare::CloudflareClient;
 use xterm_backend::services::ssh_pool::SshPool;
 use xterm_backend::services::vault::Vault;
 
@@ -44,6 +45,7 @@ async fn test_files_router_auth_and_remotes() {
         db: db.clone(),
         vault: vault.clone(),
         pool,
+        cf: CloudflareClient::new(),
     };
 
     let app = axum::Router::new().nest("/api", files::router(app_state));
