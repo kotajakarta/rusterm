@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tracing::{info, Level};
@@ -10,21 +12,18 @@ use xterm_backend::controllers::{
     terminal_ws,
 };
 use xterm_backend::models::db::DbStore;
+use xterm_backend::services::app_launcher;
 use xterm_backend::services::cloudflare::CloudflareClient;
 use xterm_backend::services::ssh_pool::SshPool;
 use xterm_backend::services::vault::Vault;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).ok();
-
     // Parse command line arguments
     let mut port: u16 = 9095;
     let mut data_dir: Option<PathBuf> = None;
     let mut dist_dir: Option<PathBuf> = None;
+    let mut no_browser: bool = false;
 
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
@@ -48,17 +47,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     i += 1;
                 }
             }
+            "--no-browser" => {
+                no_browser = true;
+            }
             _ => {}
         }
         i += 1;
     }
 
     let base_data_dir = data_dir.unwrap_or_else(|| {
-        dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("xterm-rust")
+        let local = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+        if local.join("xterm-rust").exists() {
+            local.join("xterm-rust")
+        } else {
+            local.join("TermDeck")
+        }
     });
     std::fs::create_dir_all(&base_data_dir)?;
+
+    #[cfg(target_os = "windows")]
+    let file_appender = tracing_appender::rolling::never(&base_data_dir, "termdeck.log");
+    #[cfg(target_os = "windows")]
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    #[cfg(target_os = "windows")]
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_writer(non_blocking)
+        .finish();
+    #[cfg(target_os = "windows")]
+    tracing::subscriber::set_global_default(subscriber).ok();
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::INFO)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).ok();
+    }
 
     let vault_path = base_data_dir.join("vault.json");
     let db_path = base_data_dir.join("xterm.sqlite");
@@ -76,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    info!("Starting xterm-rust backend on port {}", port);
+    info!("Starting TermDeck backend on port {}", port);
     info!("Data directory: {:?}", base_data_dir);
     info!("Frontend dist directory: {:?}", dist_path);
 
@@ -132,6 +157,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     info!("Server listening on http://localhost:{}", port);
+
+    // Launch standalone browser window if requested
+    if !no_browser {
+        let dir_clone = base_data_dir.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            app_launcher::launch_app_window(port, &dir_clone);
+        });
+    }
 
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {
         tokio::signal::ctrl_c().await.ok();
