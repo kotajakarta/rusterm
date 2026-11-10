@@ -18,9 +18,11 @@ Tujuan utama dari desain ini adalah menghasilkan **satu file `.exe` portabel tun
 
 ### Goals
 - **Single Portable Binary:** Menghasilkan satu file executable Windows mandiri (`termdeck.exe`) yang telah menyematkan (*embed*) seluruh aset frontend (HTML, CSS, JS, font, favicon) di dalam binary menggunakan crate `rust-embed`.
+- **Pure GUI Window (Tanpa Konsol):** Binary dikompilasi dengan atribut `#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]` sehingga saat diklik dua kali, tidak ada jendela Command Prompt hitam yang muncul.
 - **Automatic App Window:** Saat dijalankan di Windows tanpa flag `--no-browser`, aplikasi otomatis mendeteksi browser Chromium bawaan sistem (Microsoft Edge `msedge.exe` atau Google Chrome `chrome.exe`) dan membukanya dalam mode aplikasi mandiri (`--app=http://127.0.0.1:<port>`) dengan direktori profil terisolasi (`%LOCALAPPDATA%\TermDeck\browser`).
 - **Dynamic Token Ingestion:** Mekanisme proteksi sesi TermDeck (injeksi token acak 32 karakter ke dalam tag `<meta name="termdeck-token">` pada `index.html`) tetap berfungsi secara dinamis dari memori.
-- **Windows Local Storage:** Database SQLite (`xterm.sqlite`) dan vault (`vault.json`) secara default disimpan di direktori data aplikasi lokal Windows (`%LOCALAPPDATA%\TermDeck\`).
+- **Windows Local Storage & File Logging:** Database SQLite (`xterm.sqlite`), vault (`vault.json`), dan file log (`termdeck.log`) disimpan di direktori lokal Windows (`%LOCALAPPDATA%\TermDeck\`).
+- **Single-Instance Re-launch Protection:** Jika `termdeck.exe` diklik kedua kali saat instans sebelumnya sudah aktif, instans baru cukup memfokuskan/membuka kembali browser ke URL aktif lalu langsung exit secara bersih tanpa bentrok port.
 - **Development Fallback:** Jika opsi `--dist-dir <path>` diberikan, server tetap memprioritaskan penyajian file dari disk lokal (mempertahankan kecepatan iterasi frontend dev).
 - **Cross-Compilation:** Skrip build (`build-windows.sh`) yang dapat mengkompilasi target Windows `x86_64-pc-windows-gnu` / `x86_64-pc-windows-msvc` langsung dari lingkungan Linux/WSL.
 
@@ -122,6 +124,26 @@ Tambahkan modul peluncur jendela mandiri (`services/app_launcher.rs`):
   2. Pastikan `frontend/dist/index.html` tersedia sebelum kompilasi Rust.
   3. Jalankan `cargo build --release --target x86_64-pc-windows-gnu` (atau `--target x86_64-pc-windows-msvc`).
   4. Salin hasil binary ke `dist-release/termdeck.exe`.
+
+### 4.5 Subsystem GUI & File Logging
+- Pada file `main.rs`, tambahkan conditional inner attribute:
+  ```rust
+  #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+  ```
+  Ini memastikan saat release build dijalankan di Windows, tidak ada console prompt hitam yang muncul.
+- Karena stdout/stderr tidak terhubung ke konsol, logging dialihkan menggunakan `tracing_appender::rolling::never` ke file `%LOCALAPPDATA%\TermDeck\termdeck.log`.
+
+### 4.6 Single-Instance Detection & Lifecycle Shutdown
+1. **Single-Instance Re-launch Check:**
+   - Sebelum melakukan `TcpListener::bind(port)`, aplikasi melakukan healthcheck singkat ke `http://127.0.0.1:<port>/api/auth/status`.
+   - Jika instans TermDeck lain sudah aktif di port tersebut:
+     - Instans baru memanggil peluncur browser untuk membuka/memfokuskan URL TermDeck.
+     - Instans baru langsung exit dengan kode 0 (tidak crash dan tidak mencoba mengambil alih database).
+2. **Lifecycle & Clean Shutdown:**
+   - Saat meluncurkan child browser (Edge/Chrome) dengan profil khusus `--user-data-dir`, browser berjalan sebagai proses terpisah.
+   - Penambahan flag `--disable-features=msStartupBoost` pada Edge untuk mencegah detasemen prematur proses browser.
+   - Backend memantau proses child browser atau mendengarkan sinyal shutdown.
+   - Pada saat shutdown, `vault.lock().await` dipanggil sebelum proses berakhir guna memastikan seluruh rahasia di-wipe dari memori dan file database tertutup rapi.
 
 ---
 
