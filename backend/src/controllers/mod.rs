@@ -5,4 +5,5 @@ pub mod snippets;
 pub mod terminal_ws;
 pub mod static_files;
 pub mod config;
+pub mod files;
 

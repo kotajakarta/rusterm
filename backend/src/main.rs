@@ -6,7 +6,7 @@ use xterm_backend::controllers::servers::AppState;
 use xterm_backend::controllers::static_files::StaticConfig;
 use xterm_backend::controllers::terminal_ws::WsAppState;
 use xterm_backend::controllers::{
-    auth, bookmarks, config, servers, snippets, static_files, terminal_ws,
+    auth, bookmarks, config, files, servers, snippets, static_files, terminal_ws,
 };
 use xterm_backend::models::db::DbStore;
 use xterm_backend::services::ssh_pool::SshPool;
@@ -112,7 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", servers::router(app_state.clone()))
         .nest("/api", bookmarks::router(app_state.clone()))
         .nest("/api", snippets::router(app_state.clone()))
-        .nest("/api", config::router(app_state.clone()));
+        .nest("/api", config::router(app_state.clone()))
+        .nest("/api", files::router(app_state.clone()));
 
     let ws_router = terminal_ws::router(ws_state);
     let static_router = static_files::router(static_config);
