@@ -4,6 +4,8 @@ node_modules/
 **/node_modules/
 dist/
 **/dist/
+dist-release/
+**/dist-release/
 *.log
 *.pid
 .DS_Store
