@@ -9,7 +9,7 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
-PORT=9095
+PORT=1945
 FOREGROUND=0
 NO_BROWSER=0
 APP_MODE=1
@@ -40,7 +40,7 @@ while [ $# -gt 0 ]; do
         -h|--help)
             echo "Usage: ./run.sh [OPTIONS]"
             echo "Options:"
-            echo "  --port <PORT>         Set port (default: 9095)"
+            echo "  --port <PORT>         Set port (default: 1945)"
             echo "  --foreground          Run in foreground"
             echo "  --no-app              Open as standard browser tab instead of app window"
             echo "  --no-browser          Do not open browser"

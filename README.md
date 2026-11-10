@@ -20,11 +20,11 @@ Jalankan:
 ./run.sh
 ```
 
-Aplikasi otomatis melakukan build frontend dan backend, lalu membuka antarmuka di **http://localhost:9095**.
+Aplikasi otomatis melakukan build frontend dan backend, lalu membuka antarmuka di **http://localhost:1945**.
 
 ### Opsi CLI:
 ```bash
-./run.sh --port 9095        # Menentukan port spesifik
+./run.sh --port 1945        # Menentukan port spesifik
 ./run.sh --foreground       # Berjalan di foreground terminal
 ./run.sh --no-browser       # Jangan membuka browser otomatis
 ./run.sh --rebuild          # Paksa build ulang frontend & backend
@@ -32,6 +32,6 @@ Aplikasi otomatis melakukan build frontend dan backend, lalu membuka antarmuka d
 
 Untuk menghentikan:
 ```bash
-./stop.sh                   # Menghentikan server di port 9095
+./stop.sh                   # Menghentikan server di port 1945
 ./stop.sh --port 9100       # Menghentikan server di port lain
 ```

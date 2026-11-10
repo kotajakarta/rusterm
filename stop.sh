@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT=9095
+PORT=1945
 
 while [ $# -gt 0 ]; do
     case "$1" in

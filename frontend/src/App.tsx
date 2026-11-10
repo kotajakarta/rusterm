@@ -772,7 +772,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           </button>
         </header>
 
-        {!token && <p className="notice bad small">Token sesi tidak ditemukan. Buka TermDeck lewat http://localhost:9095 setelah menjalankan ./run.sh.</p>}
+        {!token && <p className="notice bad small">Token sesi tidak ditemukan. Buka TermDeck lewat http://localhost:1945 setelah menjalankan ./run.sh.</p>}
         {loadError && <p className="notice bad small">{loadError}</p>}
 
         <div className="sidebar-scroll">

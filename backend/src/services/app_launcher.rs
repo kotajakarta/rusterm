@@ -2,6 +2,25 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::info;
 
+pub fn resolve_data_dir(cli_dir: Option<PathBuf>, exe_path: Option<PathBuf>) -> PathBuf {
+    if let Some(dir) = cli_dir {
+        return dir;
+    }
+
+    if let Some(path) = exe_path {
+        if let Some(parent) = path.parent() {
+            return parent.join("conf");
+        }
+    }
+
+    let local = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    if local.join("xterm-rust").exists() {
+        local.join("xterm-rust")
+    } else {
+        local.join("TermDeck")
+    }
+}
+
 pub fn build_app_args(port: u16, profile_dir: &Path) -> Vec<String> {
     vec![
         format!("--app=http://127.0.0.1:{}", port),

@@ -32,7 +32,7 @@ export function CloudflareRouteModal({
   onClose,
 }: Props) {
   const isEdit = Boolean(editRoute);
-  const parsed = editRoute ? parseService(editRoute.service) : { proto: "http://", target: "localhost:9095" };
+  const parsed = editRoute ? parseService(editRoute.service) : { proto: "http://", target: "localhost:1945" };
 
   const [subdomain, setSubdomain] = useState("");
   const [selectedZoneId, setSelectedZoneId] = useState<string>(zones[0]?.id ?? "");
@@ -286,7 +286,7 @@ export function CloudflareRouteModal({
             </select>
             <input
               type="text"
-              placeholder="localhost:9095 atau 192.168.1.x:port"
+              placeholder="localhost:1945 atau 192.168.1.x:port"
               value={originTarget}
               onChange={(e) => setOriginTarget(e.target.value)}
               disabled={saving}

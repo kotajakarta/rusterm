@@ -20,7 +20,7 @@ use xterm_backend::services::vault::Vault;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse command line arguments
-    let mut port: u16 = 9095;
+    let mut port: u16 = 1945;
     let mut data_dir: Option<PathBuf> = None;
     let mut dist_dir: Option<PathBuf> = None;
     let mut no_browser: bool = false;
@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match args[i].as_str() {
             "--port" => {
                 if i + 1 < args.len() {
-                    port = args[i + 1].parse().unwrap_or(9095);
+                    port = args[i + 1].parse().unwrap_or(1945);
                     i += 1;
                 }
             }
@@ -55,14 +55,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         i += 1;
     }
 
-    let base_data_dir = data_dir.unwrap_or_else(|| {
-        let local = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-        if local.join("xterm-rust").exists() {
-            local.join("xterm-rust")
-        } else {
-            local.join("TermDeck")
-        }
-    });
+    let exe_path = std::env::current_exe().ok();
+    let base_data_dir = app_launcher::resolve_data_dir(data_dir, exe_path);
     std::fs::create_dir_all(&base_data_dir)?;
 
     #[cfg(target_os = "windows")]

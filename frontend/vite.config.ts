@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 // Dev: run `python termdeck.py --no-browser --token dev`, then open
 // http://localhost:5173/?token=dev
-const backend = "http://127.0.0.1:9095";
+const backend = "http://127.0.0.1:1945";
 
 export default defineConfig({
   plugins: [react()],
