@@ -63,7 +63,7 @@ async fn check_update(
 
     // Query GitHub API for latest release
     let client = reqwest::Client::builder()
-        .user_agent("rusterm-app/0.1.0")
+        .user_agent(concat!("rusterm-app/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -100,7 +100,7 @@ async fn check_update(
         current_version: current_version.clone(),
         latest_version: current_version,
         has_update: false,
-        release_title: Some("RusTerm v0.1.0".into()),
+        release_title: Some(format!("RusTerm v{}", env!("CARGO_PKG_VERSION"))),
         release_notes: Some("Rilis Windows mandiri (.exe) tersedia di https://github.com/kotajakarta/rusterm/releases".into()),
         download_url: Some(release_repo_url),
     }))

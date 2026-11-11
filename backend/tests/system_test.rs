@@ -62,7 +62,7 @@ async fn test_system_update_check_auth_and_response() {
     let check: UpdateCheckResult = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(check.platform, "desktop");
-    assert_eq!(check.current_version, "0.1.0");
+    assert_eq!(check.current_version, "0.2.0");
     assert!(check.download_url.is_some());
     let url = check.download_url.unwrap();
     assert!(url.contains("kotajakarta/rusterm"));
