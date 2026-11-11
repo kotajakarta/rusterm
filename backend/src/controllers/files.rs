@@ -1,12 +1,14 @@
 use crate::controllers::servers::AppState;
 use crate::models::files::{
-    FileActionBody, FileRemote, FileRemoteInput, SyncBookmarksBody, ToggleBookmarkBody,
-    ToggleBookmarkOut, TransferBody,
+    DirectTransferIn, FileActionBody, FileRemote, FileRemoteInput, SyncBookmarksBody,
+    ToggleBookmarkBody, ToggleBookmarkOut, TransferBody,
 };
+use crate::models::server::DecryptedServerCreds;
+use crate::services::transfer::{relative_paths, run_transfer, TransferJob, TransferSpec};
 use crate::services::vault::Vault;
 use axum::{
     body::Bytes,
-    extract::{Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::Response,
     routing::{get, post, put},
@@ -15,6 +17,9 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
+/// Largest file accepted by the file manager upload (the body is buffered in memory).
+pub const UPLOAD_MAX_BYTES: usize = 512 * 1024 * 1024;
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         // Files explorer on remote server
@@ -22,7 +27,10 @@ pub fn router(state: AppState) -> Router {
         .route("/files/:server_id/principals", get(get_principals))
         .route("/files/:server_id/read", get(read_file))
         .route("/files/:server_id/action", post(file_action))
-        .route("/files/:server_id/upload", post(upload_file))
+        .route(
+            "/files/:server_id/upload",
+            post(upload_file).layer(DefaultBodyLimit::max(UPLOAD_MAX_BYTES)),
+        )
         .route("/files/:server_id/download", get(download_file))
         .route("/files/:server_id/view", get(view_file))
         .route("/files/:server_id/thumb", get(view_thumb))
@@ -348,6 +356,25 @@ fn get_view_mime(ext: &str) -> Option<&'static str> {
     }
 }
 
+/// Reads a whole remote file. A failing `cat` (missing file, permission denied) is an error,
+/// not file content: stderr is kept apart so it never ends up inside the download.
+async fn cat_remote_file(
+    state: &AppState,
+    creds: &DecryptedServerCreds,
+    clean_path: &str,
+) -> Result<Vec<u8>, (StatusCode, String)> {
+    let cmd = format!("cat -- '{}'", clean_path.replace('\'', "'\\''"));
+    let out = state
+        .pool
+        .exec_capture(creds, &cmd, &[], 600)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    if !out.success() {
+        return Err((StatusCode::NOT_FOUND, out.failure_message()));
+    }
+    Ok(out.stdout)
+}
+
 async fn download_file(
     AxumPath(server_id): AxumPath<i64>,
     Query(query): Query<FileStreamQuery>,
@@ -374,12 +401,7 @@ async fn download_file(
         .and_then(|n| n.to_str())
         .unwrap_or("file");
 
-    let cmd = format!("cat -- '{}'", clean_path.replace('\'', "'\\''"));
-    let content = state
-        .pool
-        .run_command_with_stdin(&creds, &cmd, &[], 60)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let content = cat_remote_file(&state, &creds, &clean_path).await?;
 
     let safe_ascii = filename.replace('"', "_").replace('\\', "_");
     let disp = format!("attachment; filename=\"{}\"", safe_ascii);
@@ -425,12 +447,7 @@ async fn view_file(
     let mime = get_view_mime(&ext)
         .ok_or((StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported preview type".into()))?;
 
-    let cmd = format!("cat -- '{}'", clean_path.replace('\'', "'\\''"));
-    let content = state
-        .pool
-        .run_command_with_stdin(&creds, &cmd, &[], 60)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let content = cat_remote_file(&state, &creds, &clean_path).await?;
 
     let res = Response::builder()
         .status(StatusCode::OK)
@@ -586,6 +603,162 @@ async fn delete_remote(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Builds the job for a saved remote: "upload" copies local → remote, "download" the reverse.
+fn remote_spec(remote: &FileRemote, body: &TransferBody) -> Result<TransferSpec, (StatusCode, String)> {
+    let upload = match body.direction.as_str() {
+        "upload" => true,
+        "download" => false,
+        other => return Err((StatusCode::BAD_REQUEST, format!("Arah transfer tidak dikenal: {}", other))),
+    };
+    let (src_id, src_root, dst_id, dst_root) = if upload {
+        (remote.local_server_id, &remote.local_path, remote.remote_server_id, &remote.remote_path)
+    } else {
+        (remote.remote_server_id, &remote.remote_path, remote.local_server_id, &remote.local_path)
+    };
+    let source_root = sanitize_path(src_root).map_err(|s| (s, "Folder sumber tidak valid".into()))?;
+    let dest_root = sanitize_path(dst_root).map_err(|s| (s, "Folder tujuan tidak valid".into()))?;
+    let rels = relative_paths(&source_root, &body.paths).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let spec = TransferSpec {
+        remote_id: Some(remote.id),
+        remote_name: remote.name.clone(),
+        direction: body.direction.clone(),
+        source_server_id: src_id,
+        source_root,
+        dest_server_id: dst_id,
+        dest_root,
+        rels,
+        ignore: remote.ignore.clone(),
+        read_gitignore: true,
+        move_sources: false,
+    };
+    check_no_overlap(&spec)?;
+    Ok(spec)
+}
+
+fn direct_spec(body: &DirectTransferIn) -> Result<TransferSpec, (StatusCode, String)> {
+    let mode = body.mode.clone().unwrap_or_else(|| "copy".into());
+    if mode != "copy" && mode != "move" {
+        return Err((StatusCode::BAD_REQUEST, format!("Mode transfer tidak dikenal: {}", mode)));
+    }
+    let source_root = sanitize_path(&body.source_dir).map_err(|s| (s, "Folder sumber tidak valid".into()))?;
+    let dest_root = sanitize_path(&body.dest_dir).map_err(|s| (s, "Folder tujuan tidak valid".into()))?;
+    let rels = relative_paths(&source_root, &body.paths).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let spec = TransferSpec {
+        remote_id: None,
+        remote_name: "Direct transfer".into(),
+        direction: mode.clone(),
+        source_server_id: body.source_server_id,
+        source_root,
+        dest_server_id: body.dest_server_id,
+        dest_root,
+        rels,
+        ignore: body.ignore.clone().unwrap_or_default(),
+        read_gitignore: body.use_gitignore.unwrap_or(true),
+        move_sources: mode == "move",
+    };
+    check_no_overlap(&spec)?;
+    Ok(spec)
+}
+
+/// On one server, copying onto the source itself (or into it) would clobber or recurse, and a
+/// move would then delete the data it just "copied".
+fn check_no_overlap(spec: &TransferSpec) -> Result<(), (StatusCode, String)> {
+    if spec.source_server_id != spec.dest_server_id {
+        return Ok(());
+    }
+    let within = |path: &str, base: &str| {
+        path == base || base == "/" || path.starts_with(&format!("{}/", base))
+    };
+    for rel in &spec.rels {
+        let src = if rel == "." {
+            spec.source_root.clone()
+        } else if spec.source_root == "/" {
+            format!("/{}", rel)
+        } else {
+            format!("{}/{}", spec.source_root, rel)
+        };
+        let target = if rel == "." {
+            spec.dest_root.clone()
+        } else if spec.dest_root == "/" {
+            format!("/{}", rel)
+        } else {
+            format!("{}/{}", spec.dest_root, rel)
+        };
+        if src == target || within(&spec.dest_root, &src) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Tujuan sama dengan atau berada di dalam sumber: {}", src),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn source_and_dest_creds(
+    state: &AppState,
+    spec: &TransferSpec,
+) -> Result<(DecryptedServerCreds, DecryptedServerCreds), (StatusCode, String)> {
+    let kek = state
+        .vault
+        .get_kek()
+        .await
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let src = state
+        .db
+        .get_server_credentials(spec.source_server_id, &kek)
+        .map_err(|_| (StatusCode::NOT_FOUND, "Server sumber tidak ditemukan".into()))?;
+    let dst = state
+        .db
+        .get_server_credentials(spec.dest_server_id, &kek)
+        .map_err(|_| (StatusCode::NOT_FOUND, "Server tujuan tidak ditemukan".into()))?;
+    Ok((src, dst))
+}
+
+/// Scan result as `TransferScan` in the frontend: the agent's counts plus the job endpoints.
+async fn scan_spec(state: &AppState, spec: &TransferSpec) -> Result<serde_json::Value, (StatusCode, String)> {
+    let (src, _dst) = source_and_dest_creds(state, spec).await?;
+    let scan = state
+        .pool
+        .run_agent(
+            &src,
+            &json!({
+                "op": "scan",
+                "root": spec.source_root,
+                "rels": spec.rels,
+                "ignore": spec.ignore,
+                "read_gitignore": spec.read_gitignore,
+            }),
+        )
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let mut map = match scan {
+        serde_json::Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    map.insert("source_server_id".into(), json!(spec.source_server_id));
+    map.insert("source_root".into(), json!(spec.source_root));
+    map.insert("dest_server_id".into(), json!(spec.dest_server_id));
+    map.insert("dest_root".into(), json!(spec.dest_root));
+    map.insert("rels".into(), json!(spec.rels));
+    map.insert("use_gitignore".into(), json!(spec.read_gitignore));
+    Ok(serde_json::Value::Object(map))
+}
+
+async fn start_job(state: &AppState, spec: TransferSpec) -> Result<Json<TransferJob>, (StatusCode, String)> {
+    let (src, dst) = source_and_dest_creds(state, &spec).await?;
+    let (job, handle) = state.transfers.create(&spec);
+    tokio::spawn(run_transfer(state.pool.clone(), src, dst, spec, handle));
+    Ok(Json(job))
+}
+
+fn remote_or_404(state: &AppState, id: i64) -> Result<FileRemote, (StatusCode, String)> {
+    state
+        .db
+        .get_file_remote(id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Remote tidak ditemukan".into()))
+}
+
 async fn scan_remote(
     AxumPath(id): AxumPath<i64>,
     State(state): State<AppState>,
@@ -595,165 +768,73 @@ async fn scan_remote(
     check_auth(&headers, None, &state.vault)
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
-
-    let remote = state
-        .db
-        .get_file_remote(id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((StatusCode::NOT_FOUND, "Remote not found".into()))?;
-
-    let (src_id, src_root, dst_id, dst_root) = if body.direction == "upload" {
-        (
-            remote.local_server_id,
-            remote.local_path.clone(),
-            remote.remote_server_id,
-            remote.remote_path.clone(),
-        )
-    } else {
-        (
-            remote.remote_server_id,
-            remote.remote_path.clone(),
-            remote.local_server_id,
-            remote.local_path.clone(),
-        )
-    };
-
-    let kek = state
-        .vault
-        .get_kek()
-        .await
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
-    let creds = state
-        .db
-        .get_server_credentials(src_id, &kek)
-        .map_err(|_| (StatusCode::NOT_FOUND, "Server not found".into()))?;
-
-    let clean_root = src_root.trim_end_matches('/');
-    let rels: Vec<String> = body
-        .paths
-        .iter()
-        .map(|p| {
-            let cp = sanitize_path(p).unwrap_or_else(|_| p.clone());
-            if cp == src_root {
-                ".".to_string()
-            } else if cp.starts_with(clean_root) {
-                cp[clean_root.len()..].trim_start_matches('/').to_string()
-            } else {
-                cp
-            }
-        })
-        .collect();
-
-    let payload = json!({
-        "op": "scan",
-        "root": src_root,
-        "rels": rels,
-        "ignore": remote.ignore,
-    });
-
-    let scan_res = state
-        .pool
-        .run_agent(&creds, &payload)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
-
-    let mut map: serde_json::Map<String, serde_json::Value> = match scan_res {
-        serde_json::Value::Object(m) => m,
-        _ => serde_json::Map::new(),
-    };
-    map.insert("source_server_id".into(), json!(src_id));
-    map.insert("source_root".into(), json!(src_root));
-    map.insert("dest_server_id".into(), json!(dst_id));
-    map.insert("dest_root".into(), json!(dst_root));
-    map.insert("rels".into(), json!(rels));
-
-    Ok(Json(serde_json::Value::Object(map)))
+    let spec = remote_spec(&remote_or_404(&state, id)?, &body)?;
+    scan_spec(&state, &spec).await.map(Json)
 }
 
 async fn start_remote_transfer(
-    AxumPath(_id): AxumPath<i64>,
+    AxumPath(id): AxumPath<i64>,
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(_body): Json<TransferBody>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    Json(body): Json<TransferBody>,
+) -> Result<Json<TransferJob>, (StatusCode, String)> {
     check_auth(&headers, None, &state.vault)
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
-
-    let job_id = format!("{:032x}", rand::random::<u128>());
-    Ok(Json(json!({
-        "job_id": job_id,
-        "status": "completed",
-        "transferred": 0,
-        "total": 0,
-    })))
+    let spec = remote_spec(&remote_or_404(&state, id)?, &body)?;
+    start_job(&state, spec).await
 }
 
 async fn get_transfer_job(
     AxumPath(job_id): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<TransferJob>, (StatusCode, String)> {
     check_auth(&headers, None, &state.vault)
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
-
-    Ok(Json(json!({
-        "job_id": job_id,
-        "status": "completed",
-        "transferred": 0,
-        "total": 0,
-    })))
+    state
+        .transfers
+        .get(&job_id)
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "Transfer tidak ditemukan".into()))
 }
 
 async fn cancel_transfer_job(
     AxumPath(job_id): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<TransferJob>, (StatusCode, String)> {
     check_auth(&headers, None, &state.vault)
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
-
-    Ok(Json(json!({
-        "job_id": job_id,
-        "status": "cancelled",
-    })))
+    state
+        .transfers
+        .cancel(&job_id)
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, "Transfer tidak ditemukan".into()))
 }
 
 async fn direct_transfer_scan(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(_body): Json<serde_json::Value>,
+    Json(body): Json<DirectTransferIn>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     check_auth(&headers, None, &state.vault)
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
-
-    Ok(Json(json!({
-        "files": 0,
-        "dirs": 0,
-        "links": 0,
-        "bytes": 0,
-        "ignored": 0,
-        "unsupported": 0,
-        "skipped": [],
-        "tar_bytes": 0,
-    })))
+    let spec = direct_spec(&body)?;
+    scan_spec(&state, &spec).await.map(Json)
 }
 
 async fn direct_transfer_start(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(_body): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    Json(body): Json<DirectTransferIn>,
+) -> Result<Json<TransferJob>, (StatusCode, String)> {
     check_auth(&headers, None, &state.vault)
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
-
-    let job_id = format!("{:032x}", rand::random::<u128>());
-    Ok(Json(json!({
-        "job_id": job_id,
-        "status": "completed",
-    })))
+    let spec = direct_spec(&body)?;
+    start_job(&state, spec).await
 }

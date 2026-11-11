@@ -87,3 +87,70 @@ fn test_files_agent_source_and_command() {
     assert!(cmd.starts_with("python3 -c '"));
     assert!(cmd.ends_with('\''));
 }
+
+#[tokio::test]
+async fn test_ssh_pool_lifecycle_and_timeout() {
+    use xterm_backend::models::server::DecryptedServerCreds;
+    use xterm_backend::services::ssh_pool::SshPool;
+
+    let pool = SshPool::new();
+    assert!(!pool.is_session_alive(999).await);
+
+    pool.disconnect(999).await;
+    pool.disconnect_all().await;
+
+    // Test connection to an unreachable address fails cleanly without hanging
+    let dummy_creds = DecryptedServerCreds {
+        id: 999,
+        name: "test-unreachable".into(),
+        host: "192.0.2.1".into(), // TEST-NET-1 (non-routable, guaranteed timeout)
+        port: 22,
+        username: "test".into(),
+        auth_type: "password".into(),
+        password: Some("test".into()),
+        private_key: None,
+        passphrase: None,
+    };
+
+    let start = std::time::Instant::now();
+    // Wrap with a test timeout slightly above 10s to ensure our internal 10s timeout triggers
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(12),
+        pool.test_connection(&dummy_creds),
+    )
+    .await;
+
+    assert!(res.is_ok(), "test_connection should have finished within 12s");
+    let err = res.unwrap().unwrap_err();
+    let err_str = err.to_string();
+    assert!(
+        err_str.contains("timed out") || err_str.contains("Gagal menghubungkan"),
+        "Expected timeout or connection failure, got: {}",
+        err_str
+    );
+    assert!(start.elapsed().as_secs() <= 11);
+}
+
+#[test]
+fn test_check_host_key_trust_on_first_use() {
+    use russh_keys::key::KeyPair;
+    use xterm_backend::services::ssh_pool::{
+        check_host_key, host_key_fingerprint, host_key_string, HostKeyCheck,
+    };
+
+    let key = KeyPair::generate_ed25519().unwrap().clone_public_key().unwrap();
+    let other = KeyPair::generate_ed25519().unwrap().clone_public_key().unwrap();
+    let stored = host_key_string(&key);
+    assert!(stored.starts_with("ssh-ed25519 "), "{}", stored);
+    assert!(host_key_fingerprint(&key).starts_with("SHA256:"));
+
+    assert_eq!(check_host_key(None, &key), HostKeyCheck::FirstUse);
+    assert_eq!(check_host_key(Some(&stored), &key), HostKeyCheck::Trusted);
+    match check_host_key(Some(&stored), &other) {
+        HostKeyCheck::Mismatch { expected_fp, presented_fp } => {
+            assert_eq!(expected_fp, host_key_fingerprint(&key));
+            assert_eq!(presented_fp, host_key_fingerprint(&other));
+        }
+        res => panic!("expected mismatch, got {:?}", res),
+    }
+}

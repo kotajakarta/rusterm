@@ -1,7 +1,9 @@
+use crate::models::db::DbStore;
 use crate::models::server::{DecryptedServerCreds, ServerStats};
 use async_trait::async_trait;
 use russh::client::{self, Handle, Handler};
 use russh_keys::key::PublicKey;
+use russh_keys::PublicKeyBase64;
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -128,6 +130,42 @@ pub enum SshError {
     KeyParse(String),
     #[error("Agent error: {0}")]
     AgentError(String),
+    #[error("{0}")]
+    HostKeyMismatch(String),
+}
+
+/// Result of [`SshPool::exec_capture`].
+#[derive(Debug, Default)]
+pub struct CommandOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_status: Option<u32>,
+}
+
+impl CommandOutput {
+    pub fn success(&self) -> bool {
+        self.exit_status == Some(0)
+    }
+
+    pub fn stdout_text(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).trim().to_string()
+    }
+
+    /// Human readable reason for a failed command: stderr, else stdout, else the exit code.
+    pub fn failure_message(&self) -> String {
+        let stderr = String::from_utf8_lossy(&self.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            return stderr;
+        }
+        let stdout = self.stdout_text();
+        if !stdout.is_empty() {
+            return stdout;
+        }
+        match self.exit_status {
+            Some(code) => format!("Perintah gagal (exit code {})", code),
+            None => "Perintah berakhir tanpa status".to_string(),
+        }
+    }
 }
 
 pub const FILES_AGENT_SRC: &str = include_str!("../files_agent.py");
@@ -136,7 +174,53 @@ pub fn build_agent_command() -> String {
     format!("python3 -c '{}'", FILES_AGENT_SRC.replace('\'', "'\\''"))
 }
 
-pub struct SimpleClientHandler;
+/// `"<algorithm> <base64>"`, the form stored in `servers.host_key`.
+pub fn host_key_string(key: &PublicKey) -> String {
+    format!("{} {}", key.name(), key.public_key_base64())
+}
+
+/// OpenSSH-style fingerprint, e.g. `SHA256:abc…`.
+pub fn host_key_fingerprint(key: &PublicKey) -> String {
+    format!("SHA256:{}", key.fingerprint())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostKeyCheck {
+    /// Matches the stored key.
+    Trusted,
+    /// No key stored yet: trust on first use.
+    FirstUse,
+    Mismatch {
+        expected_fp: String,
+        presented_fp: String,
+    },
+}
+
+/// Compares the key a server presents with the stored one. Only the key blob is compared:
+/// the algorithm label of an RSA key varies with the negotiated signature hash.
+pub fn check_host_key(expected: Option<&str>, presented: &PublicKey) -> HostKeyCheck {
+    let Some(stored) = expected else {
+        return HostKeyCheck::FirstUse;
+    };
+    let stored_blob = stored.split_whitespace().last().unwrap_or("");
+    if stored_blob == presented.public_key_base64() {
+        return HostKeyCheck::Trusted;
+    }
+    let expected_fp = russh_keys::parse_public_key_base64(stored_blob)
+        .map(|k| host_key_fingerprint(&k))
+        .unwrap_or_else(|_| "(tidak dikenal)".to_string());
+    HostKeyCheck::Mismatch {
+        expected_fp,
+        presented_fp: host_key_fingerprint(presented),
+    }
+}
+
+/// Verifies the server's host key against `expected` and records what it saw, so the pool
+/// can store a first-use key or report a mismatch after the handshake.
+pub struct SimpleClientHandler {
+    expected: Option<String>,
+    seen: Arc<std::sync::Mutex<Option<(HostKeyCheck, String, String)>>>,
+}
 
 #[async_trait]
 impl Handler for SimpleClientHandler {
@@ -144,9 +228,18 @@ impl Handler for SimpleClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        let check = check_host_key(self.expected.as_deref(), server_public_key);
+        let accept = !matches!(check, HostKeyCheck::Mismatch { .. });
+        if let Ok(mut seen) = self.seen.lock() {
+            *seen = Some((
+                check,
+                host_key_string(server_public_key),
+                host_key_fingerprint(server_public_key),
+            ));
+        }
+        Ok(accept)
     }
 }
 
@@ -157,6 +250,8 @@ pub struct SshSession {
 #[derive(Clone)]
 pub struct SshPool {
     pool: Arc<Mutex<HashMap<i64, Arc<SshSession>>>>,
+    /// Where trusted host keys live; `None` accepts every key (tests only).
+    host_keys: Option<DbStore>,
 }
 
 impl Default for SshPool {
@@ -166,9 +261,19 @@ impl Default for SshPool {
 }
 
 impl SshPool {
+    /// A pool that accepts any host key. Production code uses [`SshPool::with_host_keys`].
     pub fn new() -> Self {
         Self {
             pool: Arc::new(Mutex::new(HashMap::new())),
+            host_keys: None,
+        }
+    }
+
+    /// A pool that verifies host keys against the servers table (trust on first use).
+    pub fn with_host_keys(db: DbStore) -> Self {
+        Self {
+            pool: Arc::new(Mutex::new(HashMap::new())),
+            host_keys: Some(db),
         }
     }
 
@@ -176,73 +281,103 @@ impl SshPool {
         &self,
         creds: &DecryptedServerCreds,
     ) -> Result<Arc<SshSession>, SshError> {
+        {
+            let map = self.pool.lock().await;
+            if let Some(session) = map.get(&creds.id) {
+                let handle = session.handle.lock().await;
+                if !handle.is_closed() {
+                    return Ok(session.clone());
+                }
+            }
+        }
+
+        let session = self.connect_new(creds).await?;
         let mut map = self.pool.lock().await;
-
-        if let Some(session) = map.get(&creds.id) {
-            let handle = session.handle.lock().await;
-            if !handle.is_closed() {
-                return Ok(session.clone());
-            }
-        }
-
-        let config = Arc::new(client::Config::default());
-        let addr = format!("{}:{}", creds.host, creds.port);
-        let mut handle = client::connect(config, addr, SimpleClientHandler).await?;
-
-        if creds.auth_type == "password" {
-            let password = creds.password.as_deref().unwrap_or("");
-            let auth_res = handle
-                .authenticate_password(&creds.username, password)
-                .await?;
-            if !auth_res {
-                return Err(SshError::AuthFailed("Invalid username or password".into()));
-            }
-        } else if creds.auth_type == "key" {
-            let key_str = creds.private_key.as_deref().unwrap_or("");
-            let key = russh_keys::decode_secret_key(key_str, creds.passphrase.as_deref())
-                .map_err(|e| SshError::KeyParse(e.to_string()))?;
-            let auth_res = handle
-                .authenticate_publickey(&creds.username, Arc::new(key))
-                .await?;
-            if !auth_res {
-                return Err(SshError::AuthFailed("Key authentication rejected".into()));
-            }
-        } else {
-            return Err(SshError::AuthFailed(format!(
-                "Unknown auth type: {}",
-                creds.auth_type
-            )));
-        }
-
-        let session = Arc::new(SshSession {
-            handle: Mutex::new(handle),
-        });
         map.insert(creds.id, session.clone());
         Ok(session)
     }
 
-    pub async fn disconnect(&self, server_id: i64) {
-        let mut map = self.pool.lock().await;
-        if let Some(session) = map.remove(&server_id) {
-            let handle = session.handle.lock().await;
-            let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
-        }
-    }
+    pub async fn connect_new(
+        &self,
+        creds: &DecryptedServerCreds,
+    ) -> Result<Arc<SshSession>, SshError> {
+        let mut config = client::Config::default();
+        config.keepalive_interval = Some(std::time::Duration::from_secs(15));
+        config.keepalive_max = 3;
+        config.inactivity_timeout = Some(std::time::Duration::from_secs(60));
+        let config = Arc::new(config);
 
-    pub async fn test_connection(&self, creds: &DecryptedServerCreds) -> Result<(), SshError> {
-        let config = Arc::new(client::Config::default());
         let addr = format!("{}:{}", creds.host, creds.port);
-        let timeout_duration = std::time::Duration::from_secs(10);
-        let connect_fut = client::connect(config, addr, SimpleClientHandler);
-        let mut handle = tokio::time::timeout(timeout_duration, connect_fut)
-            .await
-            .map_err(|_| SshError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "Koneksi SSH timed out (10s)")))??;
 
+        // 1. TCP connect with 10s timeout and TCP_NODELAY
+        let tcp_stream = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        .map_err(|_| {
+            SshError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Koneksi TCP ke {} timed out (10s)", addr),
+            ))
+        })?
+        .map_err(|e| {
+            SshError::Io(std::io::Error::new(
+                e.kind(),
+                format!("Gagal menghubungkan ke {}: {}", addr, e),
+            ))
+        })?;
+
+        let _ = tcp_stream.set_nodelay(true);
+
+        // 2. SSH protocol handshake with 10s timeout, verifying the host key
+        let store = self.host_keys.as_ref().filter(|_| creds.id > 0);
+        let expected = store.and_then(|db| db.get_host_key(creds.id).ok().flatten());
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let handler = SimpleClientHandler {
+            expected,
+            seen: seen.clone(),
+        };
+        let connected = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client::connect_stream(config, tcp_stream, handler),
+        )
+        .await
+        .map_err(|_| {
+            SshError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH protocol handshake timed out (10s)",
+            ))
+        })?;
+        let seen_key = seen.lock().ok().and_then(|s| s.clone());
+        let mut handle = match connected {
+            Ok(h) => h,
+            Err(e) => {
+                if let Some((HostKeyCheck::Mismatch { expected_fp, presented_fp }, _, _)) = seen_key {
+                    return Err(SshError::HostKeyMismatch(format!(
+                        "Host key server berubah! Tersimpan {}, diterima {}. Jika server memang di-install ulang, buka Edit server lalu klik \"Reset host key\".",
+                        expected_fp, presented_fp
+                    )));
+                }
+                return Err(e.into());
+            }
+        };
+
+        // 3. Authentication with 10s timeout
         if creds.auth_type == "password" {
             let password = creds.password.as_deref().unwrap_or("");
-            let auth_res = handle
-                .authenticate_password(&creds.username, password)
-                .await?;
+            let auth_res = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                handle.authenticate_password(&creds.username, password),
+            )
+            .await
+            .map_err(|_| {
+                SshError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Autentikasi password timed out (10s)",
+                ))
+            })??;
+
             if !auth_res {
                 return Err(SshError::AuthFailed("Username atau password salah".into()));
             }
@@ -250,11 +385,20 @@ impl SshPool {
             let key_str = creds.private_key.as_deref().unwrap_or("");
             let key = russh_keys::decode_secret_key(key_str, creds.passphrase.as_deref())
                 .map_err(|e| SshError::KeyParse(format!("Format private key tidak valid: {}", e)))?;
-            let auth_res = handle
-                .authenticate_publickey(&creds.username, Arc::new(key))
-                .await?;
+            let auth_res = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                handle.authenticate_publickey(&creds.username, Arc::new(key)),
+            )
+            .await
+            .map_err(|_| {
+                SshError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Autentikasi private key timed out (10s)",
+                ))
+            })??;
+
             if !auth_res {
-                return Err(SshError::AuthFailed("Autentikasi private key ditolak oleh server".into()));
+                return Err(SshError::AuthFailed("Autentikasi key ditolak oleh server".into()));
             }
         } else {
             return Err(SshError::AuthFailed(format!(
@@ -263,6 +407,113 @@ impl SshPool {
             )));
         }
 
+        // 4. Trust on first use: remember the key once authentication succeeded.
+        if let (Some(db), Some((HostKeyCheck::FirstUse, key, fp))) = (store, seen_key) {
+            if let Err(e) = db.set_host_key(creds.id, &key, &fp) {
+                tracing::warn!("Gagal menyimpan host key server {}: {}", creds.id, e);
+            }
+        }
+
+        Ok(Arc::new(SshSession {
+            handle: Mutex::new(handle),
+        }))
+    }
+
+    pub async fn open_channel(
+        &self,
+        creds: &DecryptedServerCreds,
+    ) -> Result<russh::Channel<russh::client::Msg>, SshError> {
+        // 1. Try existing session in pool first
+        let existing_session = {
+            let map = self.pool.lock().await;
+            map.get(&creds.id).cloned()
+        };
+
+        if let Some(session) = existing_session {
+            let channel_opt = {
+                let handle = session.handle.lock().await;
+                if !handle.is_closed() {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        handle.channel_open_session(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                } else {
+                    None
+                }
+            };
+
+            if let Some(channel) = channel_opt {
+                return Ok(channel);
+            }
+
+            // Stale / disconnected session in pool: evict it
+            self.disconnect(creds.id).await;
+        }
+
+        // 2. Connect fresh session (or reconnect after evicting stale session)
+        let new_session = self.connect_new(creds).await?;
+        let channel = {
+            let handle = new_session.handle.lock().await;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                handle.channel_open_session(),
+            )
+            .await
+            .map_err(|_| {
+                SshError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Channel open timed out (10s)",
+                ))
+            })??
+        };
+
+        // Store connected session in pool
+        {
+            let mut map = self.pool.lock().await;
+            map.insert(creds.id, new_session);
+        }
+
+        Ok(channel)
+    }
+
+    pub async fn is_session_alive(&self, server_id: i64) -> bool {
+        let map = self.pool.lock().await;
+        if let Some(session) = map.get(&server_id) {
+            let handle = session.handle.lock().await;
+            !handle.is_closed()
+        } else {
+            false
+        }
+    }
+
+    pub async fn disconnect(&self, server_id: i64) {
+        let session_opt = {
+            let mut map = self.pool.lock().await;
+            map.remove(&server_id)
+        };
+        if let Some(session) = session_opt {
+            let handle = session.handle.lock().await;
+            let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+        }
+    }
+
+    pub async fn disconnect_all(&self) {
+        let sessions: Vec<Arc<SshSession>> = {
+            let mut map = self.pool.lock().await;
+            map.drain().map(|(_, s)| s).collect()
+        };
+        for session in sessions {
+            let handle = session.handle.lock().await;
+            let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
+        }
+    }
+
+    pub async fn test_connection(&self, creds: &DecryptedServerCreds) -> Result<(), SshError> {
+        let session = self.connect_new(creds).await?;
+        let handle = session.handle.lock().await;
         let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "en").await;
         Ok(())
     }
@@ -272,11 +523,7 @@ impl SshPool {
         creds: &DecryptedServerCreds,
         cmd: &str,
     ) -> Result<String, SshError> {
-        let session = self.get_or_connect(creds).await?;
-        let mut channel = {
-            let handle = session.handle.lock().await;
-            handle.channel_open_session().await?
-        };
+        let mut channel = self.open_channel(creds).await?;
 
         channel.exec(true, cmd).await?;
         let mut output = Vec::new();
@@ -311,11 +558,7 @@ impl SshPool {
         stdin_data: &[u8],
         timeout_secs: u64,
     ) -> Result<Vec<u8>, SshError> {
-        let session = self.get_or_connect(creds).await?;
-        let mut channel = {
-            let handle = session.handle.lock().await;
-            handle.channel_open_session().await?
-        };
+        let mut channel = self.open_channel(creds).await?;
 
         channel.exec(true, cmd).await?;
         if !stdin_data.is_empty() {
@@ -345,6 +588,58 @@ impl SshPool {
             .map_err(|_| SshError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "Command timed out")))?;
 
         Ok(output)
+    }
+
+    /// Runs `cmd` and keeps stdout, stderr and the exit status apart, so callers can tell a
+    /// failed command from its output (the other helpers merge both streams and ignore the
+    /// exit status).
+    pub async fn exec_capture(
+        &self,
+        creds: &DecryptedServerCreds,
+        cmd: &str,
+        stdin_data: &[u8],
+        timeout_secs: u64,
+    ) -> Result<CommandOutput, SshError> {
+        let mut channel = self.open_channel(creds).await?;
+
+        channel.exec(true, cmd).await?;
+        if !stdin_data.is_empty() {
+            channel.data(stdin_data).await?;
+        }
+        channel.eof().await?;
+
+        let mut out = CommandOutput::default();
+        let read_fut = async {
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { ref data } => out.stdout.extend_from_slice(data),
+                    russh::ChannelMsg::ExtendedData { ref data, .. } => {
+                        out.stderr.extend_from_slice(data)
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => {
+                        out.exit_status = Some(exit_status)
+                    }
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => {
+                        if out.exit_status.is_some() || matches!(msg, russh::ChannelMsg::Close) {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        let timed_out = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), read_fut)
+            .await
+            .is_err();
+        let _ = channel.close().await;
+        if timed_out {
+            return Err(SshError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("Perintah melewati batas waktu ({} detik)", timeout_secs),
+            )));
+        }
+        Ok(out)
     }
 
     pub async fn run_agent(

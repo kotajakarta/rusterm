@@ -183,11 +183,18 @@ impl DbStore {
         let conn = self.pool.get()?;
 
         // If password/key/passphrase is None, preserve existing from DB
-        let (existing_pw, existing_key, existing_passphrase): (Option<String>, Option<String>, Option<String>) = conn
+        #[allow(clippy::type_complexity)]
+        let (existing_pw, existing_key, existing_passphrase, old_host, old_port): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            i64,
+        ) = conn
             .query_row(
-                "SELECT password, private_key, passphrase FROM servers WHERE id = ?1",
+                "SELECT password, private_key, passphrase, host, port FROM servers WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .map_err(|_| DbError::NotFound)?;
 
@@ -235,6 +242,35 @@ impl DbStore {
             ],
         )?;
 
+        // A trusted host key belongs to the machine at host:port; another address is another
+        // machine, so it must be trusted afresh.
+        if old_host != input.host || old_port != input.port {
+            conn.execute(
+                "UPDATE servers SET host_key = NULL, host_key_fp = NULL WHERE id = ?1",
+                params![id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// The trusted SSH host key (`"<algorithm> <base64>"`), if one has been stored.
+    pub fn get_host_key(&self, id: i64) -> Result<Option<String>, DbError> {
+        let conn = self.pool.get()?;
+        conn.query_row(
+            "SELECT host_key FROM servers WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|_| DbError::NotFound)
+    }
+
+    pub fn set_host_key(&self, id: i64, key: &str, fingerprint: &str) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "UPDATE servers SET host_key = ?1, host_key_fp = ?2 WHERE id = ?3",
+            params![key, fingerprint, id],
+        )?;
         Ok(())
     }
 

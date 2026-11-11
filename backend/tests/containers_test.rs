@@ -91,6 +91,7 @@ async fn test_containers_router_auth() {
         vault: vault.clone(),
         pool,
         cf: CloudflareClient::new(),
+        transfers: Default::default(),
     };
 
     let app = axum::Router::new().nest("/api", containers::router(app_state));

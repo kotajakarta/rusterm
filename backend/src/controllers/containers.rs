@@ -42,6 +42,26 @@ async fn check_auth(headers: &HeaderMap, vault: &Vault) -> Result<(), StatusCode
     }
 }
 
+/// Runs a mutating engine command and fails with its stderr when the exit status is non-zero
+/// (`run_command` ignores the exit status, so failures used to be reported as success).
+async fn run_checked(
+    state: &AppState,
+    creds: &DecryptedServerCreds,
+    cmd: &str,
+    timeout_secs: u64,
+) -> Result<String, (StatusCode, String)> {
+    let out = state
+        .pool
+        .exec_capture(creds, cmd, &[], timeout_secs)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+    if out.success() {
+        Ok(out.stdout_text())
+    } else {
+        Err((StatusCode::BAD_REQUEST, out.failure_message()))
+    }
+}
+
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -272,11 +292,7 @@ async fn container_action(
         format!("{} {} {}", eng_info.engine, body.action, cid_q)
     };
 
-    let out = state
-        .pool
-        .run_command(&creds, &cmd)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let out = run_checked(&state, &creds, &cmd, 60).await?;
 
     Ok(Json(json!({
         "ok": true,
@@ -513,11 +529,7 @@ async fn pull_image(
 
     let img_q = shell_quote(body.image.trim());
     let cmd = format!("{} pull {}", eng_info.engine, img_q);
-    let out = state
-        .pool
-        .run_command(&creds, &cmd)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let out = run_checked(&state, &creds, &cmd, 900).await?;
 
     Ok(Json(json!({
         "ok": true,
@@ -565,11 +577,7 @@ async fn delete_image(
     let img_q = shell_quote(&query.image_id);
     let cmd = format!("{} rmi {}{}", eng_info.engine, flag, img_q);
 
-    let out = state
-        .pool
-        .run_command(&creds, &cmd)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let out = run_checked(&state, &creds, &cmd, 120).await?;
 
     Ok(Json(json!({
         "ok": true,
@@ -645,11 +653,7 @@ async fn run_container(
     }
 
     let cmd = parts.join(" ");
-    let out = state
-        .pool
-        .run_command(&creds, &cmd)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let out = run_checked(&state, &creds, &cmd, 600).await?;
 
     let new_cid = out.trim();
     let short_cid = if new_cid.len() > 12 {

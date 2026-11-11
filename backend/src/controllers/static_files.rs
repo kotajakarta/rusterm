@@ -19,7 +19,10 @@ pub struct StaticConfig {
 }
 
 pub fn inject_token_into_html(html: &str, token: &str) -> String {
-    let meta = format!(r#"<meta name="termdeck-token" content="{}">"#, token);
+    let meta = format!(
+        r#"<meta name="rusterm-token" content="{}"><meta name="termdeck-token" content="{}">"#,
+        token, token
+    );
     html.replacen("<head>", &format!("<head>\n    {}", meta), 1)
 }
 
@@ -68,6 +71,16 @@ async fn static_fallback_handler(
     uri: Uri,
 ) -> Response<Body> {
     let path = uri.path().trim_start_matches('/');
+
+    // Unknown API routes must not fall through to the SPA index.html: the frontend
+    // would parse the HTML as JSON ("Unexpected token '<'") instead of seeing a 404.
+    if path == "api" || path.starts_with("api/") || path.starts_with("ws/") {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"detail":"Endpoint API tidak ditemukan"}"#))
+            .unwrap();
+    }
 
     // Security check: block path traversal attempts
     let rel_path = Path::new(path);

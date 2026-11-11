@@ -1,5 +1,6 @@
 use crate::controllers::servers::AppState;
 use crate::services::ssh_pool::SshPool;
+use crate::services::shell::{build_cd_command, StartupGate};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -125,8 +126,8 @@ async fn handle_socket(mut socket: WebSocket, query: WsQuery, state: WsAppState)
         }
     };
 
-    let session = match state.pool.get_or_connect(&creds).await {
-        Ok(s) => s,
+    let mut channel = match state.pool.open_channel(&creds).await {
+        Ok(c) => c,
         Err(e) => {
             let _ = socket
                 .send(Message::Text(
@@ -137,24 +138,6 @@ async fn handle_socket(mut socket: WebSocket, query: WsQuery, state: WsAppState)
                 ))
                 .await;
             return;
-        }
-    };
-
-    let mut channel = {
-        let handle = session.handle.lock().await;
-        match handle.channel_open_session().await {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = socket
-                    .send(Message::Text(
-                        serde_json::to_string(&WsServerMsg::Error {
-                            message: format!("Failed to open channel: {}", e),
-                        })
-                        .unwrap(),
-                    ))
-                    .await;
-                return;
-            }
         }
     };
 
@@ -203,25 +186,32 @@ async fn handle_socket(mut socket: WebSocket, query: WsQuery, state: WsAppState)
         ))
         .await;
 
-    // Execute startup bookmark command if provided
-    if let Some(bm_id) = query.bookmark_id {
-        if let Ok(bm) = state.app.db.get_bookmark(bm_id) {
-            let cmd = if bm.startup_cmd.is_empty() {
-                format!("cd \"{}\"\n", bm.path)
-            } else {
-                format!("cd \"{}\" && {}\n", bm.path, bm.startup_cmd)
-            };
-            let _ = channel.data(cmd.as_bytes()).await;
-        }
-    }
+    // Saved path: typed into the shell once it is waiting at its prompt (see StartupGate).
+    // Only bookmarks of this server are honoured.
+    let mut startup_cmd: Option<String> = query
+        .bookmark_id
+        .and_then(|bm_id| state.app.db.get_bookmark(bm_id).ok())
+        .filter(|bm| bm.server_id == query.server_id)
+        .map(|bm| format!("{}\r", build_cd_command(&bm.path, &bm.startup_cmd)));
+    let mut startup_gate = StartupGate::new(tokio::time::Instant::now());
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(startup_gate.due_at()), if startup_cmd.is_some() => {
+                if let Some(cmd) = startup_cmd.take() {
+                    if channel.data(cmd.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            }
             msg = channel.wait() => {
                 match msg {
                     Some(ChannelMsg::Data { ref data }) => {
+                        if startup_cmd.is_some() {
+                            startup_gate.on_output(tokio::time::Instant::now());
+                        }
                         if ws_sender.send(Message::Binary(data.to_vec())).await.is_err() {
                             break;
                         }
@@ -269,5 +259,13 @@ async fn handle_socket(mut socket: WebSocket, query: WsQuery, state: WsAppState)
                 }
             }
         }
+    }
+
+    // Dropping the channel does not close it: without this the remote shell (and whatever
+    // runs in it) keeps living on the pooled SSH connection after the tab is gone.
+    let _ = channel.close().await;
+
+    if !state.pool.is_session_alive(query.server_id).await {
+        state.pool.disconnect(query.server_id).await;
     }
 }

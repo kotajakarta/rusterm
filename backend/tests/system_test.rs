@@ -26,6 +26,7 @@ async fn test_system_update_check_auth_and_response() {
         vault: vault.clone(),
         pool,
         cf,
+        transfers: Default::default(),
     };
 
     let app = axum::Router::new().nest("/api", system::router(app_state));

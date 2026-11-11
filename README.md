@@ -25,10 +25,15 @@ Aplikasi otomatis melakukan build frontend dan backend, lalu membuka antarmuka d
 ### Opsi CLI:
 ```bash
 ./run.sh --port 1945        # Menentukan port spesifik
+./run.sh --host 0.0.0.0     # Buka akses dari perangkat lain di jaringan (default hanya 127.0.0.1)
 ./run.sh --foreground       # Berjalan di foreground terminal
 ./run.sh --no-browser       # Jangan membuka browser otomatis
 ./run.sh --rebuild          # Paksa build ulang frontend & backend
 ```
+
+Secara default RusTerm hanya bisa diakses dari komputer ini (`127.0.0.1`). Dengan `--host 0.0.0.0`
+siapa pun di jaringan yang sama bisa membuka halaman login, jadi gunakan PIN yang kuat; setelah 5 PIN
+salah berturut-turut login dikunci sementara (30 detik, berlipat ganda hingga 15 menit).
 
 Untuk menghentikan:
 ```bash

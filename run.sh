@@ -10,6 +10,7 @@ if [ -f "$HOME/.cargo/env" ]; then
 fi
 
 PORT=1945
+HOST=127.0.0.1
 FOREGROUND=0
 NO_BROWSER=0
 APP_MODE=1
@@ -19,6 +20,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --port)
             PORT="$2"
+            shift 2
+            ;;
+        --host)
+            HOST="$2"
             shift 2
             ;;
         --foreground)
@@ -41,6 +46,7 @@ while [ $# -gt 0 ]; do
             echo "Usage: ./run.sh [OPTIONS]"
             echo "Options:"
             echo "  --port <PORT>         Set port (default: 1945)"
+            echo "  --host <ADDR>         Bind address (default: 127.0.0.1; 0.0.0.0 opens it to the LAN)"
             echo "  --foreground          Run in foreground"
             echo "  --no-app              Open as standard browser tab instead of app window"
             echo "  --no-browser          Do not open browser"
@@ -163,14 +169,14 @@ if [ "$FOREGROUND" = 1 ]; then
             open_browser "$PORT" "$APP_MODE"
         ) &
     fi
-    exec "$BIN" --port "$PORT" --data-dir "$DATA_DIR" --dist-dir "$SCRIPT_DIR/frontend/dist"
+    exec "$BIN" --port "$PORT" --host "$HOST" --data-dir "$DATA_DIR" --dist-dir "$SCRIPT_DIR/frontend/dist"
 else
     if command -v setsid >/dev/null 2>&1; then
-        setsid -f "$BIN" --port "$PORT" --data-dir "$DATA_DIR" --dist-dir "$SCRIPT_DIR/frontend/dist" < /dev/null > "$LOG_FILE" 2>&1
+        setsid -f "$BIN" --port "$PORT" --host "$HOST" --data-dir "$DATA_DIR" --dist-dir "$SCRIPT_DIR/frontend/dist" < /dev/null > "$LOG_FILE" 2>&1
         sleep 0.5
         PID=$(lsof -ti :"$PORT" 2>/dev/null || true)
     else
-        nohup "$BIN" --port "$PORT" --data-dir "$DATA_DIR" --dist-dir "$SCRIPT_DIR/frontend/dist" < /dev/null > "$LOG_FILE" 2>&1 &
+        nohup "$BIN" --port "$PORT" --host "$HOST" --data-dir "$DATA_DIR" --dist-dir "$SCRIPT_DIR/frontend/dist" < /dev/null > "$LOG_FILE" 2>&1 &
         PID=$!
         disown "$PID" 2>/dev/null || true
     fi

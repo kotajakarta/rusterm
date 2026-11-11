@@ -333,3 +333,45 @@ async fn test_db_cf_accounts() {
     db.delete_cf_account(acc.id).unwrap();
     assert!(db.list_cf_accounts().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn test_host_key_storage_and_reset_on_host_change() {
+    let dir = tempdir().unwrap();
+    let vault = Vault::new(&dir.path().join("vault.json")).await.unwrap();
+    vault.setup_pin("123456").await.unwrap();
+    let kek = vault.get_kek().await.unwrap();
+    let db = DbStore::new(&dir.path().join("db.sqlite")).unwrap();
+    let mut input = ServerInput {
+        name: "Web".into(),
+        host: "10.0.0.5".into(),
+        port: 22,
+        username: "root".into(),
+        auth_type: "password".into(),
+        password: Some("pw".into()),
+        private_key: None,
+        passphrase: None,
+        group_name: "".into(),
+        color: "".into(),
+    };
+    let id = db.create_server(&input, &kek).unwrap();
+    assert_eq!(db.get_host_key(id).unwrap(), None);
+
+    db.set_host_key(id, "ssh-ed25519 AAAAkey", "SHA256:abc").unwrap();
+    assert_eq!(db.get_host_key(id).unwrap().as_deref(), Some("ssh-ed25519 AAAAkey"));
+    assert_eq!(db.list_servers().unwrap()[0].host_key_fingerprint.as_deref(), Some("SHA256:abc"));
+
+    // Renaming keeps the trusted key; pointing at another machine forgets it.
+    input.name = "Web baru".into();
+    input.password = None;
+    db.update_server(id, &input, &kek).unwrap();
+    assert!(db.get_host_key(id).unwrap().is_some());
+    input.host = "10.0.0.6".into();
+    db.update_server(id, &input, &kek).unwrap();
+    assert_eq!(db.get_host_key(id).unwrap(), None);
+    assert_eq!(db.list_servers().unwrap()[0].host_key_fingerprint, None);
+
+    db.set_host_key(id, "ssh-ed25519 AAAAkey2", "SHA256:def").unwrap();
+    input.port = 2222;
+    db.update_server(id, &input, &kek).unwrap();
+    assert_eq!(db.get_host_key(id).unwrap(), None);
+}

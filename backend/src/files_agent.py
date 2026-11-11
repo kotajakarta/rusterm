@@ -15,6 +15,7 @@ import stat
 import struct
 import sys
 import tarfile
+import time
 
 MAX_READ_BYTES = 2 * 1024 * 1024  # editor limit; downloads stream separately
 
@@ -331,6 +332,85 @@ def op_upload(req, stream):
         raise
     return describe(dest)
 
+def op_ls(req):
+    """Folder picker listing: accepts `~` / `~/sub`, follows symlinks for is_dir, dirs first."""
+    raw = req.get("path") or "~"
+    if not isinstance(raw, str):
+        raise AgentError("Path must be absolute")
+    if raw == "~" or raw.startswith("~/"):
+        raw = os.path.expanduser("~") + raw[1:]
+    path = norm(raw)
+    entries = []
+    with os.scandir(fs(path)) as it:
+        for de in it:
+            name = os.fsdecode(de.name)
+            if name.startswith("."):
+                continue
+            full = os.path.join(path, name)
+            try:
+                st = os.lstat(fs(full))
+            except OSError:
+                continue  # vanished while listing
+            is_link = stat.S_ISLNK(st.st_mode)
+            is_dir = stat.S_ISDIR(st.st_mode)
+            if is_link:
+                try:
+                    is_dir = stat.S_ISDIR(os.stat(fs(full)).st_mode)
+                except OSError:
+                    is_dir = False
+            entries.append({
+                "name": name,
+                "path": full,
+                "is_dir": is_dir,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+                "mode": stat.filemode(st.st_mode),
+                "is_symlink": is_link,
+            })
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+    return {"path": path, "entries": entries}
+
+PASTE_NAME_RE = re.compile(r"^paste-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.(png|jpg|gif|webp)$")
+
+def op_paste_image(req, stream):
+    """Stores a pasted clipboard image (owner-only) under ~/<dir> and prunes stale pastes."""
+    rel = req.get("dir")
+    name = req.get("name")
+    if (not isinstance(rel, str) or not rel or rel.startswith("/") or "\x00" in rel
+            or ".." in rel.split("/")):
+        raise AgentError("Invalid paste directory")
+    if not isinstance(name, str) or not PASTE_NAME_RE.match(name):
+        raise AgentError("Invalid file name")
+    directory = os.path.join(os.path.expanduser("~"), rel)
+    os.makedirs(fs(directory), 0o700, exist_ok=True)
+    keep = float(req.get("keep_seconds") or 0)
+    if keep > 0:
+        cutoff = time.time() - keep
+        with os.scandir(fs(directory)) as it:
+            for de in it:
+                if not os.fsdecode(de.name).startswith("paste-"):
+                    continue
+                try:
+                    if de.is_file(follow_symlinks=False) and de.stat(follow_symlinks=False).st_mtime < cutoff:
+                        os.unlink(de.path)
+                except OSError:
+                    pass
+    dest = os.path.join(directory, name)
+    fd = os.open(fs(dest), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), 0o600)
+            while True:
+                size = struct.unpack(">I", _read_exact(stream, 4))[0]
+                if not size:
+                    break
+                f.write(_read_exact(stream, size))
+    except BaseException:
+        if os.path.lexists(fs(dest)):
+            os.unlink(fs(dest))
+        raise
+    return {"path": dest}
+
 def op_principals(req):
     users = sorted({u.pw_name for u in pwd.getpwall()})
     groups = sorted({g.gr_name for g in grp.getgrall()})
@@ -478,8 +558,35 @@ def op_scan(req):
     counts["tar_bytes"] = tar_bytes
     return counts
 
+CREDIT_BYTES = 1024 * 1024
+
+class _CreditWriter:
+    """Flow control for server-to-server streaming: after every CREDIT_BYTES written, flush and
+    wait for one credit byte on stdin, so the relay never buffers more than its credit window.
+    EOF on stdin means the relay went away (cancelled)."""
+
+    def __init__(self, out, credits):
+        self.out = out
+        self.credits = credits
+        self.pending = 0
+
+    def write(self, data):
+        self.out.write(data)
+        self.pending += len(data)
+        while self.pending >= CREDIT_BYTES:
+            self.pending -= CREDIT_BYTES
+            self.out.flush()
+            if not self.credits.read(1):
+                raise AgentError("Transfer cancelled")
+        return len(data)
+
+    def flush(self):
+        self.out.flush()
+
 def op_pack(req, out):
     root, rels, rules, _ = _sync_args(req)
+    if req.get("credit"):
+        out = _CreditWriter(out, sys.stdin.buffer)
     for rel in rels:
         os.lstat(fs(root if rel == "." else os.path.join(root, rel)))
     counts = _new_counts()
@@ -624,7 +731,7 @@ def op_unpack(req, stream):
 OPS = {
     "list": op_list, "stat": op_stat, "read": op_read, "write": op_write, "mkdir": op_mkdir,
     "symlink": op_symlink, "rename": op_rename, "paste": op_paste, "delete": op_delete,
-    "chmod": op_chmod, "principals": op_principals, "scan": op_scan,
+    "chmod": op_chmod, "principals": op_principals, "scan": op_scan, "ls": op_ls,
 }
 
 def main():
@@ -640,6 +747,8 @@ def main():
             result = {"ok": True, "result": op_unpack(req, sys.stdin.buffer)}
         elif op == "upload":
             result = {"ok": True, "result": op_upload(req, sys.stdin.buffer)}
+        elif op == "paste_image":
+            result = {"ok": True, "result": op_paste_image(req, sys.stdin.buffer)}
         else:
             handler = OPS.get(op)
             if not handler:

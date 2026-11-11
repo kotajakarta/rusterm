@@ -1,4 +1,6 @@
+pub mod api_errors;
 pub mod auth;
+pub mod request_guard;
 pub mod servers;
 pub mod bookmarks;
 pub mod snippets;

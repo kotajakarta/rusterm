@@ -159,3 +159,78 @@ async fn test_backup_crypto_roundtrip() {
     assert_eq!(decrypted.snippets.len(), 1);
     assert_eq!(decrypted.snippets[0].name, "Check disk");
 }
+
+#[tokio::test]
+async fn test_login_locks_out_after_five_wrong_pins() {
+    use std::time::{Duration, Instant};
+    use xterm_backend::services::vault::VaultError;
+
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Vault::new(&dir.path().join("vault.json")).await.unwrap();
+    vault.setup_pin("123456").await.unwrap();
+    vault.lock().await;
+
+    let t0 = Instant::now();
+    for _ in 0..5 {
+        assert!(matches!(vault.login_at("000000", t0).await, Err(VaultError::InvalidPin)));
+    }
+    // Locked: even the right PIN is refused, without revealing whether it was right.
+    match vault.login_at("123456", t0 + Duration::from_secs(1)).await {
+        Err(VaultError::TooManyAttempts(secs)) => assert!(secs > 0 && secs <= 30, "{}", secs),
+        other => panic!("expected lockout, got {:?}", other.map(|_| ())),
+    }
+    // After the window the right PIN works and resets the counter.
+    assert!(vault.login_at("123456", t0 + Duration::from_secs(31)).await.is_ok());
+    assert!(matches!(
+        vault.login_at("000000", t0 + Duration::from_secs(32)).await,
+        Err(VaultError::InvalidPin)
+    ));
+
+    // Repeated lockouts double the wait, capped at 15 minutes.
+    let t1 = t0 + Duration::from_secs(100);
+    for _ in 0..5 {
+        let _ = vault.login_at("000000", t1).await;
+    }
+    let t2 = t1 + Duration::from_secs(31);
+    assert!(matches!(vault.login_at("000000", t2).await, Err(VaultError::InvalidPin)));
+    match vault.login_at("123456", t2).await {
+        Err(VaultError::TooManyAttempts(secs)) => assert!(secs > 30 && secs <= 60, "{}", secs),
+        other => panic!("expected doubled lockout, got {:?}", other.map(|_| ())),
+    }
+}
+
+#[tokio::test]
+async fn test_lock_endpoint_requires_session() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+    use xterm_backend::controllers::{auth, servers::AppState};
+    use xterm_backend::models::db::DbStore;
+    use xterm_backend::services::{cloudflare::CloudflareClient, ssh_pool::SshPool};
+
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Vault::new(&dir.path().join("vault.json")).await.unwrap();
+    let session = vault.setup_pin("123456").await.unwrap();
+    let app = axum::Router::new().nest(
+        "/api/auth",
+        auth::router(AppState {
+            db: DbStore::new(&dir.path().join("db.sqlite")).unwrap(),
+            vault: vault.clone(),
+            pool: SshPool::new(),
+            cf: CloudflareClient::new(),
+            transfers: Default::default(),
+        }),
+    );
+    let lock = |s: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/auth/lock")
+            .header("X-Session", s)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(app.clone().oneshot(lock("")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    assert!(vault.is_session_valid(&session).await, "anonymous lock must not end the session");
+    assert_eq!(app.clone().oneshot(lock(&session)).await.unwrap().status(), StatusCode::NO_CONTENT);
+    assert!(!vault.is_session_valid(&session).await);
+}

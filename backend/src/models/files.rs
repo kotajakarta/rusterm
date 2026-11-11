@@ -116,3 +116,20 @@ pub struct TransferBody {
     pub direction: String, // "upload" | "download"
     pub paths: Vec<String>,
 }
+
+/// Body of `/files/direct-transfer/scan` and `/start` (`DirectTransferScanIn` /
+/// `DirectTransferStartIn` in the frontend).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectTransferIn {
+    pub source_server_id: i64,
+    pub dest_server_id: i64,
+    pub source_dir: String,
+    pub dest_dir: String,
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub ignore: Option<Vec<String>>,
+    #[serde(default)]
+    pub use_gitignore: Option<bool>,
+}

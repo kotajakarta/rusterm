@@ -9,6 +9,7 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -32,6 +33,18 @@ pub enum VaultError {
     Json(#[from] serde_json::Error),
     #[error("Crypto error: {0}")]
     Crypto(String),
+    #[error("Terlalu banyak percobaan PIN. Coba lagi dalam {0} detik.")]
+    TooManyAttempts(u64),
+}
+
+/// Consecutive wrong PINs before logins are refused for a while.
+pub const MAX_FAILED_ATTEMPTS: u32 = 5;
+const FIRST_LOCKOUT_SECS: u64 = 30;
+const MAX_LOCKOUT_SECS: u64 = 15 * 60;
+
+fn lockout_secs(failed: u32) -> u64 {
+    let doublings = failed.saturating_sub(MAX_FAILED_ATTEMPTS).min(16);
+    (FIRST_LOCKOUT_SECS << doublings).min(MAX_LOCKOUT_SECS)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -53,11 +66,15 @@ pub struct VaultInner {
     pub data: Option<VaultData>,
     pub kek: Option<Zeroizing<[u8; 32]>>,
     pub sessions: HashSet<String>,
+    pub failed_attempts: u32,
+    pub locked_until: Option<Instant>,
 }
 
 #[derive(Clone)]
 pub struct Vault {
     inner: Arc<RwLock<VaultInner>>,
+    /// One PIN check at a time, so parallel guesses cannot slip past the lockout.
+    login_gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Vault {
@@ -75,7 +92,10 @@ impl Vault {
                 data,
                 kek: None,
                 sessions: HashSet::new(),
+                failed_attempts: 0,
+                locked_until: None,
             })),
+            login_gate: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -138,28 +158,61 @@ impl Vault {
     }
 
     pub async fn login(&self, pin: &str) -> Result<String, VaultError> {
+        self.login_at(pin, Instant::now()).await
+    }
+
+    /// `login` with an explicit clock, for the lockout rules.
+    pub async fn login_at(&self, pin: &str, now: Instant) -> Result<String, VaultError> {
+        let _gate = self.login_gate.lock().await;
+        let data = {
+            let guard = self.inner.read().await;
+            if let Some(until) = guard.locked_until {
+                if now < until {
+                    let left = until.duration_since(now);
+                    let secs = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+                    return Err(VaultError::TooManyAttempts(secs.max(1)));
+                }
+            }
+            guard.data.clone().ok_or(VaultError::NotInitialized)?
+        };
+
+        // Argon2 is slow on purpose: run it off the async workers and without holding the
+        // vault lock, so other requests keep flowing while a PIN is checked.
+        let pin_owned = Zeroizing::new(pin.to_string());
+        let kek = tokio::task::spawn_blocking(move || -> Result<Option<[u8; 32]>, VaultError> {
+            let parsed_hash =
+                PasswordHash::new(&data.pin_hash).map_err(|e| VaultError::Crypto(e.to_string()))?;
+            if Argon2::default()
+                .verify_password(pin_owned.as_bytes(), &parsed_hash)
+                .is_err()
+            {
+                return Ok(None);
+            }
+            let kek_salt = BASE64
+                .decode(&data.salt_b64)
+                .map_err(|e| VaultError::Crypto(e.to_string()))?;
+            Self::derive_kek(&pin_owned, &kek_salt).map(Some)
+        })
+        .await
+        .map_err(|e| VaultError::Crypto(e.to_string()))??;
+
         let mut guard = self.inner.write().await;
-        let data = guard.data.as_ref().ok_or(VaultError::NotInitialized)?;
-
-        let parsed_hash = PasswordHash::new(&data.pin_hash)
-            .map_err(|e| VaultError::Crypto(e.to_string()))?;
-
-        Argon2::default()
-            .verify_password(pin.as_bytes(), &parsed_hash)
-            .map_err(|_| VaultError::InvalidPin)?;
-
-        let kek_salt = BASE64
-            .decode(&data.salt_b64)
-            .map_err(|e| VaultError::Crypto(e.to_string()))?;
-
-        let kek = Self::derive_kek(pin, &kek_salt)?;
+        let Some(kek) = kek else {
+            guard.failed_attempts += 1;
+            if guard.failed_attempts >= MAX_FAILED_ATTEMPTS {
+                let secs = lockout_secs(guard.failed_attempts);
+                guard.locked_until = Some(now + Duration::from_secs(secs));
+            }
+            return Err(VaultError::InvalidPin);
+        };
+        guard.failed_attempts = 0;
+        guard.locked_until = None;
         guard.kek = Some(Zeroizing::new(kek));
 
         let mut token_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut token_bytes);
         let session = token_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
         guard.sessions.insert(session.clone());
-
         Ok(session)
     }
 

@@ -1,5 +1,5 @@
-use crate::controllers::servers::AppState;
-use crate::services::vault::AuthStatus;
+use crate::controllers::servers::{check_auth, AppState};
+use crate::services::vault::{AuthStatus, VaultError};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -70,6 +70,7 @@ async fn login_handler(
             session,
             must_change_pin: false,
         })),
+        Err(e @ VaultError::TooManyAttempts(_)) => Err((StatusCode::TOO_MANY_REQUESTS, e.to_string())),
         Err(e) => Err((StatusCode::UNAUTHORIZED, e.to_string())),
     }
 }
@@ -98,7 +99,11 @@ async fn change_pin_handler(
     }
 }
 
-async fn lock_handler(State(state): State<AppState>) -> impl IntoResponse {
+async fn lock_handler(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    if check_auth(&headers, &state.vault).await.is_err() {
+        return StatusCode::UNAUTHORIZED;
+    }
     state.vault.lock().await;
+    state.pool.disconnect_all().await;
     StatusCode::NO_CONTENT
 }
