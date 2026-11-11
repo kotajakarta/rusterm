@@ -931,22 +931,6 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
                       {bookmark ? `:${bookmark.path}` : ""}
                     </code>
                     <span className="spacer" />
-                    <button
-                      type="button"
-                      className="btn btn-small pane-btn"
-                      onClick={() => openFileManager(tab.serverId, bookmark?.path ?? "~")}
-                      title="Buka File Manager (Cockpit) untuk server ini"
-                    >
-                      <Icon name="folder" size={13} /> File
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-small pane-btn"
-                      onClick={() => openContainers(tab.serverId)}
-                      title="Buka modul Containers (Podman / Docker) untuk server ini"
-                    >
-                      <Icon name="box" size={13} /> Containers
-                    </button>
                     {hasPaths && (
                       <button
                         type="button"

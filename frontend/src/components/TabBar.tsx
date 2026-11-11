@@ -60,8 +60,8 @@ export function TabBar({
   onToggleBroadcast,
   workspaceMode = "terminal",
   onChangeWorkspaceMode,
-  onOpenFiles: _onOpenFiles,
-  onOpenContainers: _onOpenContainers,
+  onOpenFiles,
+  onOpenContainers,
   servers,
   onSelect,
   onClose,
@@ -142,6 +142,32 @@ export function TabBar({
             <Icon name="terminal" size={13} />
             <span>Terminal</span>
           </button>
+          {onOpenFiles && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === "files"}
+              className={`workspace-mode-btn${workspaceMode === "files" ? " is-active" : ""}`}
+              onClick={onOpenFiles}
+              title="Buka File Manager (Cockpit) untuk server terminal aktif"
+            >
+              <Icon name="folder" size={13} />
+              <span>File</span>
+            </button>
+          )}
+          {onOpenContainers && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === "containers"}
+              className={`workspace-mode-btn${workspaceMode === "containers" ? " is-active" : ""}`}
+              onClick={onOpenContainers}
+              title="Buka modul Containers (Podman / Docker) untuk server terminal aktif"
+            >
+              <Icon name="box" size={13} />
+              <span>Containers</span>
+            </button>
+          )}
         </div>
       )}
       <div className="tabs" role="tablist" aria-label="Terminal terbuka" ref={tabsRef}>
