@@ -47,7 +47,7 @@ export function ConfigBackupDialog({ onClose, onImportSuccess, onOpenCloudSync }
       const jsonStr = JSON.stringify(envelope, null, 2);
       const blob = new Blob([jsonStr], { type: "application/json" });
       const dateStr = new Date().toISOString().split("T")[0];
-      await downloadBlob(blob, `termdeck-backup-${dateStr}.tdk`);
+      await downloadBlob(blob, `rusterm-backup-${dateStr}.tdk`);
       setExportSuccess(true);
     } catch (err) {
       setExportError(errorMessage(err));

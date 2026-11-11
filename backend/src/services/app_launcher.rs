@@ -14,10 +14,14 @@ pub fn resolve_data_dir(cli_dir: Option<PathBuf>, exe_path: Option<PathBuf>) -> 
     }
 
     let local = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-    if local.join("xterm-rust").exists() {
+    if local.join("rusterm").exists() {
+        local.join("rusterm")
+    } else if local.join("xterm-rust").exists() {
         local.join("xterm-rust")
-    } else {
+    } else if local.join("TermDeck").exists() {
         local.join("TermDeck")
+    } else {
+        local.join("RusTerm")
     }
 }
 

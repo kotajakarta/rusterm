@@ -98,7 +98,7 @@ export function SetupPin({ onCreated }: { onCreated: () => void }) {
           style={{ marginTop: "16px" }}
           disabled={busy || pin.length < 4 || confirmPin.length < 4}
         >
-          {busy ? "Menyimpan…" : "Buat PIN & Buka TermDeck"}
+          {busy ? "Menyimpan…" : "Buat PIN & Buka RusTerm"}
         </button>
       </form>
     </div>

@@ -8,6 +8,10 @@ name = "xterm_backend"
 path = "src/lib.rs"
 
 [[bin]]
+name = "rusterm"
+path = "src/main.rs"
+
+[[bin]]
 name = "xterm-backend"
 path = "src/main.rs"
 

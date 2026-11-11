@@ -51,19 +51,20 @@ import type {
 /** Session token: embedded in the page by the backend; `?token=` is the Vite dev-server fallback. */
 export const token =
   (typeof document !== "undefined"
-    ? document.querySelector<HTMLMetaElement>('meta[name="termdeck-token"]')?.content
+    ? document.querySelector<HTMLMetaElement>('meta[name="rusterm-token"], meta[name="termdeck-token"]')?.content
     : null) ??
   (typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("token")
     : null) ??
   "";
 
-const SESSION_KEY = "termdeck.session";
+const SESSION_KEY = "rusterm.session";
+const LEGACY_SESSION_KEY = "termdeck.session";
 
 function readSession(): string {
   try {
     if (typeof sessionStorage !== "undefined") {
-      return sessionStorage.getItem(SESSION_KEY) ?? "";
+      return sessionStorage.getItem(SESSION_KEY) ?? sessionStorage.getItem(LEGACY_SESSION_KEY) ?? "";
     }
   } catch {
     return "";

@@ -122,7 +122,7 @@ export function CloudflareAccountModal({ accounts, onAccountsChanged, onClose }:
   };
 
   const handleDelete = async (id: number, accName: string) => {
-    if (!window.confirm(`Hapus akun "${accName}" dari TermDeck? Tunnel di Cloudflare tidak akan terhapus.`)) return;
+    if (!window.confirm(`Hapus akun "${accName}" dari RusTerm? Tunnel di Cloudflare tidak akan terhapus.`)) return;
     setDeletingId(id);
     try {
       await api.cfDeleteAccount(id);
@@ -207,7 +207,7 @@ export function CloudflareAccountModal({ accounts, onAccountsChanged, onClose }:
       {activeTab === "list" && (
         <div className="cf-account-view">
           <p className="backup-desc">
-            Daftar akun Cloudflare yang terhubung ke TermDeck. Kredensial disimpan secara terenkripsi (AES-256)
+            Daftar akun Cloudflare yang terhubung ke RusTerm. Kredensial disimpan secara terenkripsi (AES-256)
             di database vault lokal.
           </p>
 

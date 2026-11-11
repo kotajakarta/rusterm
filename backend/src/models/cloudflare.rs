@@ -95,7 +95,7 @@ pub struct CFSyncNowIn {
 }
 
 fn default_device_name() -> String {
-    "TermDeck Desktop".into()
+    "RusTerm Desktop".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,7 +35,7 @@ export function LockScreen({ onUnlocked }: { onUnlocked: (mustChangePin?: boolea
         <span className="lock-mark" aria-hidden="true">
           <Icon name="lock" size={22} />
         </span>
-        <h1>TermDeck terkunci</h1>
+        <h1>RusTerm terkunci</h1>
         <p>Masukkan PIN untuk membuka data server Anda.</p>
         <label className="sr-only" htmlFor="pin">
           PIN

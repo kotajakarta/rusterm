@@ -10,7 +10,7 @@ if [ -f "$HOME/.cargo/env" ]; then
 fi
 
 echo "============================================================"
-echo "    TermDeck Windows Standalone Executable (.exe) Build    "
+echo "    RusTerm Windows Standalone Executable (.exe) Build    "
 echo "============================================================"
 
 # 1. Verify MinGW toolchain
@@ -36,8 +36,9 @@ echo "==> [2/3] Mengkompilasi release binary Windows (.exe)..."
 # 5. Output packaging
 echo "==> [3/3] Menyiapkan paket rilis..."
 mkdir -p dist-release
-cp backend/target/x86_64-pc-windows-gnu/release/xterm-backend.exe dist-release/termdeck.exe
+cp backend/target/x86_64-pc-windows-gnu/release/rusterm.exe dist-release/rusterm.exe
+cp backend/target/x86_64-pc-windows-gnu/release/rusterm.exe dist-release/termdeck.exe
 
 echo "==> Berhasil! Binary Windows mandiri tersedia di:"
-ls -lh dist-release/termdeck.exe
-file dist-release/termdeck.exe
+ls -lh dist-release/rusterm.exe
+file dist-release/rusterm.exe

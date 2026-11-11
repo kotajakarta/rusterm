@@ -59,12 +59,12 @@ type Dialog =
   | { kind: "sync" }
   | null;
 
-const LAYOUT_KEY = "termdeck.layout";
-const FONT_SIZE_KEY = "termdeck.fontSize";
-const BOOKMARK_USAGE_KEY = "termdeck.bookmarkUsage";
+const LAYOUT_KEY = "rusterm.layout";
+const FONT_SIZE_KEY = "rusterm.fontSize";
+const BOOKMARK_USAGE_KEY = "rusterm.bookmarkUsage";
 
 function initialPanes(): PaneState {
-  const saved = readString(LAYOUT_KEY);
+  const saved = readString(LAYOUT_KEY, "termdeck.layout");
   if (saved) {
     if (LAYOUTS.some((l) => l.kind === saved) || SNAP_LAYOUTS.some((l) => l.kind === saved)) return emptyPanes(saved);
     if (/^\d+x\d+$/.test(saved.trim())) return emptyPanes(saved);
@@ -73,13 +73,13 @@ function initialPanes(): PaneState {
 }
 
 function initialFontSize(): number {
-  const saved = readString(FONT_SIZE_KEY);
+  const saved = readString(FONT_SIZE_KEY, "termdeck.fontSize");
   if (!saved) return DEFAULT_FONT_SIZE;
   return clampFontSize(Number(saved));
 }
 
 function initialBookmarkUsage(): BookmarkUsageMap {
-  const saved = readString(BOOKMARK_USAGE_KEY);
+  const saved = readString(BOOKMARK_USAGE_KEY, "termdeck.bookmarkUsage");
   if (!saved) return {};
   try {
     const parsed = JSON.parse(saved) as BookmarkUsageMap;
@@ -104,11 +104,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarMini, setSidebarMini] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("termdeck.sidebarMini") === "true";
-    } catch {
-      return false;
-    }
+    return readString("rusterm.sidebarMini", "termdeck.sidebarMini") === "true";
   });
   const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers">("terminal");
   const [filesTargetReq, setFilesTargetReq] = useState<{
@@ -643,7 +639,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
       kind: "confirm",
       title: `Hapus ${server.name}?`,
       message:
-        `Server ${server.username}@${server.host} beserta ${count} path tersimpannya akan dihapus dari TermDeck. ` +
+        `Server ${server.username}@${server.host} beserta ${count} path tersimpannya akan dihapus dari RusTerm. ` +
         "Tab terminal yang terbuka ke server ini akan ditutup.",
       confirmLabel: "Hapus server",
       action: async () => {
@@ -697,7 +693,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           <span className="brand-mark" aria-hidden="true">
             <Icon name="terminal" size={16} />
           </span>
-          <span className="brand-name">TermDeck</span>
+          <span className="brand-name">RusTerm</span>
           <button
             type="button"
             className="icon-btn sidebar-mini-toggle"
@@ -705,7 +701,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
               setSidebarMini((prev) => {
                 const next = !prev;
                 try {
-                  localStorage.setItem("termdeck.sidebarMini", String(next));
+                  localStorage.setItem("rusterm.sidebarMini", String(next));
                 } catch {
                   // ignore
                 }
@@ -757,8 +753,8 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             type="button"
             className="icon-btn"
             onClick={() => void onLock()}
-            title="Kunci TermDeck (semua terminal ditutup)"
-            aria-label="Kunci TermDeck"
+            title="Kunci RusTerm (semua terminal ditutup)"
+            aria-label="Kunci RusTerm"
           >
             <Icon name="lock" size={15} />
           </button>
@@ -772,7 +768,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           </button>
         </header>
 
-        {!token && <p className="notice bad small">Token sesi tidak ditemukan. Buka TermDeck lewat http://localhost:1945 setelah menjalankan ./run.sh.</p>}
+        {!token && <p className="notice bad small">Token sesi tidak ditemukan. Buka RusTerm lewat http://localhost:1945 setelah menjalankan ./run.sh.</p>}
         {loadError && <p className="notice bad small">{loadError}</p>}
 
         <div className="sidebar-scroll">

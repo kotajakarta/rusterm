@@ -10,7 +10,8 @@ use thiserror::Error;
 
 use crate::models::server::{BackupEnvelope, BackupKdf, BackupPayload};
 
-pub const BACKUP_MAGIC: &str = "TERMDECK_BACKUP";
+pub const BACKUP_MAGIC: &str = "RUSTERM_BACKUP";
+pub const LEGACY_BACKUP_MAGIC: &str = "TERMDECK_BACKUP";
 pub const BACKUP_VERSION: u32 = 1;
 pub const PBKDF2_ITERATIONS: u32 = 100_000;
 
@@ -110,7 +111,7 @@ impl CryptoService {
     }
 
     pub fn decrypt_backup(envelope: &BackupEnvelope, pin: &str) -> Result<BackupPayload, CryptoError> {
-        if envelope.magic != BACKUP_MAGIC {
+        if envelope.magic != BACKUP_MAGIC && envelope.magic != LEGACY_BACKUP_MAGIC {
             return Err(CryptoError::InvalidBackupFormat(
                 "Format file backup tidak valid (magic header salah)".into(),
             ));

@@ -15,13 +15,14 @@ export async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Utility helper to download or save a Blob safely across both desktop browsers and TermDeck Android WebView.
+ * Utility helper to download or save a Blob safely across both desktop browsers and mobile WebView.
  */
 export async function downloadBlob(blob: Blob, fileName: string): Promise<void> {
-  // 1. TermDeck Android WebView native interface
-  if (typeof window !== "undefined" && window.TermDeckApp?.saveBlob) {
+  // 1. Android WebView native interface
+  const nativeApp = typeof window !== "undefined" ? (window.RusTermApp || window.TermDeckApp) : undefined;
+  if (nativeApp?.saveBlob) {
     const base64Data = await blobToBase64(blob);
-    window.TermDeckApp.saveBlob(base64Data, fileName, blob.type || "application/octet-stream");
+    nativeApp.saveBlob(base64Data, fileName, blob.type || "application/octet-stream");
     return;
   }
 

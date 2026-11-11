@@ -434,6 +434,9 @@ export interface CFSyncPullOut {
 
 declare global {
   interface Window {
+    RusTermApp?: {
+      saveBlob?: (base64Data: string, fileName: string, mimeType: string) => void;
+    };
     TermDeckApp?: {
       saveBlob?: (base64Data: string, fileName: string, mimeType: string) => void;
     };

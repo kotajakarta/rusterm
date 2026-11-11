@@ -40,7 +40,7 @@ impl CloudflareClient {
             HeaderValue::from_str(&format!("Bearer {}", token))
                 .map_err(|e| format!("Invalid auth token format: {}", e))?,
         );
-        headers.insert(USER_AGENT, HeaderValue::from_static("TermDeck-Cloudflare/1.0"));
+        headers.insert(USER_AGENT, HeaderValue::from_static("RusTerm-Cloudflare/1.0"));
 
         let mut req = self.client.request(method, &url).headers(headers);
         if let Some(b) = body {
@@ -519,7 +519,7 @@ impl CloudflareClient {
             .client
             .get(&url)
             .header(AUTHORIZATION, format!("Bearer {}", token))
-            .header(USER_AGENT, "TermDeck-Cloudflare/1.0")
+            .header(USER_AGENT, "RusTerm-Cloudflare/1.0")
             .send()
             .await
             .map_err(|e| format!("KV metadata request failed: {}", e))?;
@@ -562,7 +562,7 @@ impl CloudflareClient {
             .client
             .get(&url)
             .header(AUTHORIZATION, format!("Bearer {}", token))
-            .header(USER_AGENT, "TermDeck-Cloudflare/1.0")
+            .header(USER_AGENT, "RusTerm-Cloudflare/1.0")
             .send()
             .await
             .map_err(|e| format!("KV value request failed: {}", e))?;
@@ -610,7 +610,7 @@ impl CloudflareClient {
             .client
             .put(&url)
             .header(AUTHORIZATION, format!("Bearer {}", token))
-            .header(USER_AGENT, "TermDeck-Cloudflare/1.0")
+            .header(USER_AGENT, "RusTerm-Cloudflare/1.0")
             .multipart(form)
             .send()
             .await

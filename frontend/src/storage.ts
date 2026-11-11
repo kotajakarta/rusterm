@@ -21,9 +21,12 @@ export function usePersistentFlag(key: string, initial: boolean): [boolean, (val
   return [value, update];
 }
 
-export function readString(key: string): string | null {
+export function readString(key: string, legacyKey?: string): string | null {
   try {
-    return localStorage.getItem(key);
+    const val = localStorage.getItem(key);
+    if (val !== null) return val;
+    if (legacyKey) return localStorage.getItem(legacyKey);
+    return null;
   } catch {
     return null;
   }

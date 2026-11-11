@@ -555,7 +555,7 @@ export function TerminalView({
         finish("closed", `${DIM}Sesi berakhir${msg.code !== null ? ` (kode ${msg.code})` : ""}.${RESET}`);
       }
     };
-    ws.onerror = () => finish("error", `${RED}Tidak bisa terhubung ke backend TermDeck.${RESET}`);
+    ws.onerror = () => finish("error", `${RED}Tidak bisa terhubung ke backend RusTerm.${RESET}`);
     ws.onclose = () => finish("closed", `${DIM}Koneksi terputus.${RESET}`);
 
     return () => {
