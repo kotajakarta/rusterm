@@ -42,13 +42,14 @@ import { ServerInfo } from "./components/ServerInfo";
 import { Sidebar } from "./components/Sidebar";
 import { Snippets } from "./components/Snippets";
 import { CloudflarePanel } from "./components/CloudflarePanel";
+import { TailscalePanel } from "./components/TailscalePanel";
 import { TabBar } from "./components/TabBar";
 import { isAppShortcut, TerminalView, type Sender, type TerminalController } from "./components/TerminalView";
 import { UpdateModal } from "./components/UpdateModal";
 import { CloudflareSyncModal } from "./components/CloudflareSyncModal";
 
 type Dialog =
-  | { kind: "server"; server: Server | null }
+  | { kind: "server"; server: Server | null; initialValues?: { host?: string; name?: string } }
   | { kind: "bookmark"; bookmark: Bookmark | null; serverId: number }
   | { kind: "confirm"; title: string; message: string; confirmLabel: string; action: () => Promise<void> }
   | { kind: "palette" }
@@ -807,6 +808,16 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             onChanged={() => void reload()}
           />
           <CloudflarePanel />
+          <TailscalePanel
+            onQuickSSH={(host, name) => {
+              const existing = servers.find((s) => s.host === host);
+              if (existing) {
+                openTab(existing.id, null, false);
+              } else {
+                setDialog({ kind: "server", server: null, initialValues: { host, name } });
+              }
+            }}
+          />
         </div>
       </aside>
 
@@ -1193,6 +1204,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
       {dialog?.kind === "server" && (
         <ServerForm
           server={dialog.server}
+          initialValues={dialog.initialValues}
           groups={groups}
           onClose={() => setDialog(null)}
           onSaved={(saved) => {

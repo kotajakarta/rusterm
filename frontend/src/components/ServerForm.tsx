@@ -8,14 +8,15 @@ import { Modal } from "./Modal";
 interface ServerFormProps {
   server: Server | null;
   groups: string[];
+  initialValues?: { host?: string; name?: string };
   onClose: () => void;
   onSaved: (server: Server) => void;
 }
 
-export function ServerForm({ server, groups, onClose, onSaved }: ServerFormProps) {
+export function ServerForm({ server, groups, initialValues, onClose, onSaved }: ServerFormProps) {
   const editing = server !== null;
-  const [name, setName] = useState(server?.name ?? "");
-  const [host, setHost] = useState(server?.host ?? "");
+  const [name, setName] = useState(server?.name ?? initialValues?.name ?? "");
+  const [host, setHost] = useState(server?.host ?? initialValues?.host ?? "");
   const [port, setPort] = useState(String(server?.port ?? 22));
   const [username, setUsername] = useState(server?.username ?? "root");
   const [authType, setAuthType] = useState<AuthType>(server?.auth_type ?? "password");
