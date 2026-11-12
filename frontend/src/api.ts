@@ -49,7 +49,6 @@ import type {
   TailscaleAccount,
   TailscaleAccountIn,
   TailscaleAccountUpdateIn,
-  TailscaleAccountVerifyIn,
   TailscaleVerifyOut,
   TailscaleDevice,
   TailscaleDeviceRoutes,

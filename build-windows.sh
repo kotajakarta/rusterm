@@ -9,14 +9,12 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
-if ! command -v npm >/dev/null 2>&1; then
-    for node_dir in "$HOME/.nvm/versions/node"/*/bin; do
-        if [ -d "$node_dir" ]; then
-            export PATH="$node_dir:$PATH"
-            break
-        fi
-    done
-fi
+for node_dir in "$HOME/.nvm/versions/node"/*/bin; do
+    if [ -d "$node_dir" ]; then
+        export PATH="$node_dir:$PATH"
+        break
+    fi
+done
 
 echo "============================================================"
 echo "    RusTerm Windows Standalone Executable (.exe) Build    "
