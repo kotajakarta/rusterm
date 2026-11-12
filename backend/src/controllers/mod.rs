@@ -10,5 +10,6 @@ pub mod config;
 pub mod files;
 pub mod containers;
 pub mod cloudflare;
+pub mod tailscale;
 pub mod system;
 

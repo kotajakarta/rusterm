@@ -9,8 +9,8 @@ use xterm_backend::controllers::servers::AppState;
 use xterm_backend::controllers::static_files::StaticConfig;
 use xterm_backend::controllers::terminal_ws::WsAppState;
 use xterm_backend::controllers::{
-    api_errors, auth, bookmarks, cloudflare, request_guard, config, containers, files, servers, snippets, static_files,
-    system, terminal_ws,
+    api_errors, auth, bookmarks, cloudflare, config, containers, files, request_guard, servers, snippets, static_files,
+    system, tailscale, terminal_ws,
 };
 use xterm_backend::models::db::DbStore;
 use xterm_backend::services::app_launcher;
@@ -128,6 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", files::router(app_state.clone()))
         .nest("/api", containers::router(app_state.clone()))
         .nest("/api", cloudflare::router(app_state.clone()))
+        .nest("/api", tailscale::router(app_state.clone()))
         .nest("/api", system::router(app_state.clone()))
         .layer(axum::middleware::map_response(api_errors::wrap_plain_errors));
 
