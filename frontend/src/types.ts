@@ -405,6 +405,28 @@ export interface TailscaleDeviceRoutes {
   enabledRoutes: string[];
 }
 
+/**
+ * Mengambil nama mesin Tailscale untuk tampilan UI.
+ * Memprioritaskan label pertama dari MagicDNS FQDN (dev.name, misal 'oracle-dev' dari 'oracle-dev.tailnet.ts.net')
+ * karena pengubahan nama di Tailscale Admin Console ("Edit machine name") memperbarui nama MagicDNS,
+ * sementara OS hostname (dev.hostname) tetap menyimpan nama lokal mesin (yang seringkali 'localhost').
+ */
+export function getTailscaleDeviceName(dev: { name?: string; hostname?: string }): string {
+  const fqdnFirst = dev.name ? dev.name.split(".")[0].trim() : "";
+  const host = (dev.hostname || "").trim();
+
+  // 1. Jika nama MagicDNS ada dan bukan "localhost", prioritaskan nama MagicDNS (hasil rename admin console)
+  if (fqdnFirst && fqdnFirst.toLowerCase() !== "localhost") {
+    return fqdnFirst;
+  }
+  // 2. Jika MagicDNS "localhost" atau kosong, gunakan hostname OS jika bukan "localhost"
+  if (host && host.toLowerCase() !== "localhost") {
+    return host;
+  }
+  // 3. Fallback jika keduanya "localhost" atau salah satu kosong
+  return fqdnFirst || host || "localhost";
+}
+
 export interface UpdateCheckResult {
   platform: "desktop" | "android" | string;
   current_version: string;

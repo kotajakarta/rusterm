@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
-import type { TailscaleDevice, TailscaleDeviceRoutes } from "../types";
+import { getTailscaleDeviceName, type TailscaleDevice, type TailscaleDeviceRoutes } from "../types";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
 
@@ -178,9 +178,10 @@ export function TailscaleDeviceModal({ accountId, device: initialDevice, onClose
 
   const ipv4 = device.addresses?.find((a) => a.includes(".")) || device.addresses?.[0] || "";
   const ipv6 = device.addresses?.find((a) => a.includes(":")) || "";
+  const devDisplayName = getTailscaleDeviceName(device);
 
   return (
-    <Modal title={`Pengaturan Mesin: ${device.hostname || device.name}`} onClose={onClose} wide>
+    <Modal title={`Pengaturan Mesin: ${devDisplayName}`} onClose={onClose} wide>
       <div style={{ display: "flex", flexDirection: "column", gap: "1.2rem", padding: "0.2rem 0" }}>
         {message && (
           <div
@@ -218,7 +219,7 @@ export function TailscaleDeviceModal({ accountId, device: initialDevice, onClose
                   }}
                   title={device.online ? "Online (Terhubung)" : "Offline"}
                 />
-                <h3 style={{ margin: 0, fontSize: "1.1rem" }}>{device.hostname || device.name}</h3>
+                <h3 style={{ margin: 0, fontSize: "1.1rem" }}>{devDisplayName}</h3>
                 <span className="badge" style={{ fontSize: "0.75rem", textTransform: "capitalize" }}>
                   {device.os || "Unknown OS"}
                 </span>
@@ -229,7 +230,7 @@ export function TailscaleDeviceModal({ accountId, device: initialDevice, onClose
                 )}
               </div>
               <div style={{ color: "var(--text-muted)", fontSize: "0.8rem", marginTop: "0.2rem" }}>
-                FQDN: <code>{device.name}</code>
+                MagicDNS (FQDN): <code>{device.name}</code>
               </div>
             </div>
             <button
@@ -251,6 +252,16 @@ export function TailscaleDeviceModal({ accountId, device: initialDevice, onClose
               fontSize: "0.85rem",
             }}
           >
+            <div>
+              <span style={{ color: "var(--text-muted)" }}>Nama Mesin:</span>
+              <div style={{ marginTop: "0.2rem", fontWeight: 600 }}>{devDisplayName}</div>
+            </div>
+            <div>
+              <span style={{ color: "var(--text-muted)" }}>Hostname OS:</span>
+              <div style={{ marginTop: "0.2rem" }}>
+                <code>{device.hostname || "N/A"}</code>
+              </div>
+            </div>
             <div>
               <span style={{ color: "var(--text-muted)" }}>Tailscale IPv4:</span>
               <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginTop: "0.2rem" }}>

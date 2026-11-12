@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../api";
 import { usePersistentFlag } from "../storage";
-import type { TailscaleAccount, TailscaleDevice } from "../types";
+import { getTailscaleDeviceName, type TailscaleAccount, type TailscaleDevice } from "../types";
 import { Icon } from "./Icon";
 import { TailscaleAccountModal } from "./TailscaleAccountModal";
 import { TailscaleDeviceModal } from "./TailscaleDeviceModal";
@@ -229,9 +229,9 @@ export function TailscalePanel({ onQuickSSH }: Props) {
                                 textOverflow: "ellipsis",
                                 whiteSpace: "nowrap",
                               }}
-                              title={dev.name}
+                              title={`MagicDNS: ${dev.name}\nHostname OS: ${dev.hostname || "-"}`}
                             >
-                              {dev.hostname || dev.name}
+                              {getTailscaleDeviceName(dev)}
                             </span>
                             <span
                               style={{
@@ -240,7 +240,7 @@ export function TailscalePanel({ onQuickSSH }: Props) {
                                 textTransform: "capitalize",
                               }}
                             >
-                              ({dev.os})
+                              ({dev.os}{dev.hostname && dev.hostname.toLowerCase() !== getTailscaleDeviceName(dev).toLowerCase() && dev.hostname.toLowerCase() !== "localhost" ? ` · ${dev.hostname}` : ""})
                             </span>
                           </div>
 
@@ -303,7 +303,7 @@ export function TailscalePanel({ onQuickSSH }: Props) {
                             <button
                               type="button"
                               className="icon-btn"
-                              onClick={() => onQuickSSH(ipv4, dev.hostname || dev.name)}
+                              onClick={() => onQuickSSH(ipv4, getTailscaleDeviceName(dev))}
                               title="Buka / Tambah SSH ke mesin ini"
                               aria-label="Koneksi SSH"
                             >
