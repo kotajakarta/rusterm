@@ -7,3 +7,4 @@ pub mod app_launcher;
 pub mod paste_image;
 pub mod shell;
 pub mod transfer;
+pub mod updater;

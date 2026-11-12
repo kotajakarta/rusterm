@@ -29,6 +29,7 @@ async fn test_cloudflare_router_auth_and_status() {
         cf,
         ts: Default::default(),
         transfers: Default::default(),
+        updater: Default::default(),
     };
 
     let app = axum::Router::new().nest("/api", cloudflare::router(app_state));

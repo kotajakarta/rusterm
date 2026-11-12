@@ -220,6 +220,7 @@ async fn test_lock_endpoint_requires_session() {
             cf: CloudflareClient::new(),
             ts: Default::default(),
             transfers: Default::default(),
+            updater: Default::default(),
         }),
     );
     let lock = |s: &str| {

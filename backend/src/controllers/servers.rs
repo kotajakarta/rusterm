@@ -28,6 +28,7 @@ pub struct AppState {
     pub cf: CloudflareClient,
     pub ts: TailscaleClient,
     pub transfers: crate::services::transfer::TransferManager,
+    pub updater: crate::services::updater::UpdateProgress,
 }
 
 #[derive(Deserialize)]

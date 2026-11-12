@@ -48,6 +48,7 @@ async fn test_files_router_auth_and_remotes() {
         cf: CloudflareClient::new(),
         ts: Default::default(),
         transfers: Default::default(),
+        updater: Default::default(),
     };
 
     let app = axum::Router::new().nest("/api", files::router(app_state));
@@ -175,6 +176,7 @@ async fn test_upload_accepts_bodies_above_axum_default_limit() {
             cf: CloudflareClient::new(),
             ts: Default::default(),
             transfers: Default::default(),
+            updater: Default::default(),
         }),
     );
 
@@ -228,6 +230,7 @@ async fn transfer_app() -> (tempfile::TempDir, axum::Router, String, i64) {
             cf: CloudflareClient::new(),
             ts: Default::default(),
             transfers: Default::default(),
+            updater: Default::default(),
         }),
     );
     (dir, app, session, id)

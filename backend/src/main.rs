@@ -29,6 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dist_dir = cli.dist_dir.clone();
 
     let exe_path = std::env::current_exe().ok();
+    if let Some(ref path) = exe_path {
+        if let Some(parent) = path.parent() {
+            xterm_backend::services::updater::cleanup_stale_old_files(parent);
+        }
+    }
     let base_data_dir = app_launcher::resolve_data_dir(data_dir, exe_path);
     std::fs::create_dir_all(&base_data_dir)?;
 
@@ -95,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cf: cf_client,
         ts: ts_client,
         transfers: Default::default(),
+        updater: Default::default(),
     };
 
     let ws_state = WsAppState {

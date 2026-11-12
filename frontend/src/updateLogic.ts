@@ -1,4 +1,4 @@
-import type { UpdateCheckResult } from "./types";
+import type { UpdateCheckResult, UpdateProgressResult } from "./types";
 
 export function formatUpdateBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
@@ -12,4 +12,23 @@ export function getUpdateBadge(check: UpdateCheckResult): { label: string; type:
     return { label: "Pembaruan Tersedia", type: "warning" };
   }
   return { label: "Versi Terbaru", type: "success" };
+}
+
+export function getUpdateStatusText(progress: UpdateProgressResult): string {
+  switch (progress.state) {
+    case "downloading": {
+      if (progress.total_bytes > 0) {
+        return `Mengunduh (${formatUpdateBytes(progress.downloaded_bytes)} / ${formatUpdateBytes(progress.total_bytes)} - ${progress.progress_percent}%)`;
+      }
+      return `Mengunduh (${formatUpdateBytes(progress.downloaded_bytes)})`;
+    }
+    case "applying":
+      return progress.message || "Memasang pembaruan dan menutup proses lama...";
+    case "completed":
+      return progress.message || "Pembaruan selesai! Memulai ulang aplikasi...";
+    case "error":
+      return `Gagal: ${progress.message || "Terjadi kesalahan saat pembaruan"}`;
+    default:
+      return progress.message || "";
+  }
 }

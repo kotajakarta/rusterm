@@ -1,4 +1,5 @@
 use crate::controllers::servers::{check_auth, AppState};
+pub use crate::services::updater::UpdateProgressResult;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -25,13 +26,10 @@ pub struct UpdateApplyResult {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct UpdateProgressResult {
-    pub state: String,
-    pub progress_percent: u32,
-    pub downloaded_bytes: u64,
-    pub total_bytes: u64,
-    pub message: String,
+#[derive(Deserialize, Debug)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -39,7 +37,10 @@ struct GitHubRelease {
     tag_name: String,
     name: Option<String>,
     body: Option<String>,
+    #[allow(dead_code)]
     html_url: String,
+    #[serde(default)]
+    assets: Vec<GitHubAsset>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -78,6 +79,34 @@ async fn check_update(
             if let Ok(release) = resp.json::<GitHubRelease>().await {
                 let latest_tag = release.tag_name.trim_start_matches('v');
                 let has_update = latest_tag != current_version;
+
+                // Pick the direct binary asset URL if available
+                #[cfg(target_os = "windows")]
+                let asset_url = release
+                    .assets
+                    .iter()
+                    .find(|a| a.name.eq_ignore_ascii_case("rusterm.exe"))
+                    .map(|a| a.browser_download_url.clone())
+                    .unwrap_or_else(|| {
+                        format!(
+                            "https://github.com/kotajakarta/rusterm/releases/download/{}/rusterm.exe",
+                            release.tag_name
+                        )
+                    });
+
+                #[cfg(not(target_os = "windows"))]
+                let asset_url = release
+                    .assets
+                    .iter()
+                    .find(|a| a.name == "rusterm")
+                    .map(|a| a.browser_download_url.clone())
+                    .unwrap_or_else(|| {
+                        format!(
+                            "https://github.com/kotajakarta/rusterm/releases/download/{}/rusterm.exe",
+                            release.tag_name
+                        )
+                    });
+
                 return Ok(Json(UpdateCheckResult {
                     platform: "desktop".into(),
                     current_version,
@@ -85,7 +114,7 @@ async fn check_update(
                     has_update,
                     release_title: release.name.or(Some(format!("RusTerm {}", release.tag_name))),
                     release_notes: release.body,
-                    download_url: Some(release.html_url),
+                    download_url: Some(asset_url),
                 }));
             }
         }
@@ -114,9 +143,29 @@ async fn apply_update(
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
 
+    let current = state.updater.get_progress().await;
+    if current.state == "downloading" || current.state == "applying" {
+        return Ok(Json(UpdateApplyResult {
+            started: true,
+            message: "Pembaruan sedang berjalan di latar belakang.".into(),
+        }));
+    }
+
+    #[cfg(target_os = "windows")]
+    let default_url = "https://github.com/kotajakarta/rusterm/releases/latest/download/rusterm.exe".to_string();
+    #[cfg(not(target_os = "windows"))]
+    let default_url = "https://github.com/kotajakarta/rusterm/releases/latest/download/rusterm".to_string();
+
+    let updater = std::sync::Arc::new(state.updater.clone());
+    tokio::spawn(async move {
+        if let Err(e) = crate::services::updater::run_in_app_update(updater, default_url).await {
+            tracing::error!("In-app self-update failed: {}", e);
+        }
+    });
+
     Ok(Json(UpdateApplyResult {
-        started: false,
-        message: "Untuk versi desktop, silakan unduh berkas eksekusi (.exe) terbaru langsung dari rilis GitHub https://github.com/kotajakarta/rusterm/releases.".into(),
+        started: true,
+        message: "Memulai proses pembaruan otomatis di latar belakang.".into(),
     }))
 }
 
@@ -128,11 +177,6 @@ async fn update_progress(
         .await
         .map_err(|s| (s, "Unauthorized".into()))?;
 
-    Ok(Json(UpdateProgressResult {
-        state: "idle".into(),
-        progress_percent: 0,
-        downloaded_bytes: 0,
-        total_bytes: 0,
-        message: "".into(),
-    }))
+    let progress = state.updater.get_progress().await;
+    Ok(Json(progress))
 }

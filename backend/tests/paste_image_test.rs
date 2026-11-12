@@ -165,6 +165,7 @@ async fn setup() -> (tempfile::TempDir, axum::Router, String, i64) {
             cf: CloudflareClient::new(),
             ts: Default::default(),
             transfers: Default::default(),
+            updater: Default::default(),
         }),
     );
     (dir, app, session, id)

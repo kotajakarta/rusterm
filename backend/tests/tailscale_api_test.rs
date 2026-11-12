@@ -30,6 +30,7 @@ async fn test_tailscale_router_auth_and_crud() {
         cf,
         ts,
         transfers: Default::default(),
+        updater: Default::default(),
     };
 
     let app = axum::Router::new().nest("/api", tailscale::router(app_state));

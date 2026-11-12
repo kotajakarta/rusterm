@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { UpdateCheckResult, UpdateProgressResult } from "../src/types.ts";
-import { formatUpdateBytes, getUpdateBadge } from "../src/updateLogic.ts";
+import { formatUpdateBytes, getUpdateBadge, getUpdateStatusText } from "../src/updateLogic.ts";
 
 test("formatUpdateBytes: formats byte sizes accurately", () => {
   assert.equal(formatUpdateBytes(0), "0 B");
@@ -39,4 +39,42 @@ test("getUpdateBadge: returns up to date badge when has_update is false", () => 
   const badge = getUpdateBadge(check);
   assert.equal(badge.label, "Versi Terbaru");
   assert.equal(badge.type, "success");
+});
+
+test("getUpdateStatusText: formats progress states accurately", () => {
+  const downloading: UpdateProgressResult = {
+    state: "downloading",
+    progress_percent: 50,
+    downloaded_bytes: 10 * 1024 * 1024,
+    total_bytes: 20 * 1024 * 1024,
+    message: "",
+  };
+  assert.match(getUpdateStatusText(downloading), /Mengunduh \(10.0 MB \/ 20.0 MB - 50%\)/);
+
+  const applying: UpdateProgressResult = {
+    state: "applying",
+    progress_percent: 100,
+    downloaded_bytes: 20 * 1024 * 1024,
+    total_bytes: 20 * 1024 * 1024,
+    message: "Memasang binary...",
+  };
+  assert.equal(getUpdateStatusText(applying), "Memasang binary...");
+
+  const completed: UpdateProgressResult = {
+    state: "completed",
+    progress_percent: 100,
+    downloaded_bytes: 20 * 1024 * 1024,
+    total_bytes: 20 * 1024 * 1024,
+    message: "Selesai!",
+  };
+  assert.equal(getUpdateStatusText(completed), "Selesai!");
+
+  const error: UpdateProgressResult = {
+    state: "error",
+    progress_percent: 0,
+    downloaded_bytes: 0,
+    total_bytes: 0,
+    message: "Koneksi terputus",
+  };
+  assert.equal(getUpdateStatusText(error), "Gagal: Koneksi terputus");
 });

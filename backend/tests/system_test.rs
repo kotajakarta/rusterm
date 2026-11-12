@@ -28,6 +28,7 @@ async fn test_system_update_check_auth_and_response() {
         cf,
         ts: Default::default(),
         transfers: Default::default(),
+        updater: Default::default(),
     };
 
     let app = axum::Router::new().nest("/api", system::router(app_state));
@@ -51,7 +52,7 @@ async fn test_system_update_check_auth_and_response() {
         .oneshot(
             Request::builder()
                 .uri("/api/system/update-check")
-                .header("X-Session", session)
+                .header("X-Session", &session)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -67,4 +68,33 @@ async fn test_system_update_check_auth_and_response() {
     assert!(check.download_url.is_some());
     let url = check.download_url.unwrap();
     assert!(url.contains("kotajakarta/rusterm"));
+
+    // 3. Test update-progress endpoint
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/update-progress")
+                .header("X-Session", &session)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // 4. Test update-apply endpoint
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/system/update-apply")
+                .header("X-Session", &session)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
