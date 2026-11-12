@@ -352,6 +352,59 @@ export interface CFRouteIn {
   zone_id?: string;
 }
 
+export interface TailscaleAccount {
+  id: number;
+  name: string;
+  token_masked: string;
+  tailnet: string;
+  created_at: string;
+}
+
+export interface TailscaleAccountIn {
+  name: string;
+  api_key: string;
+  tailnet?: string;
+}
+
+export interface TailscaleAccountUpdateIn {
+  name: string;
+  api_key?: string;
+  tailnet?: string;
+}
+
+export interface TailscaleVerifyOut {
+  valid: boolean;
+  tailnet: string;
+  devices_count: number;
+}
+
+export interface TailscaleDevice {
+  id: string;
+  name: string;
+  user: string;
+  os: string;
+  hostname: string;
+  clientVersion: string;
+  updateAvailable: boolean;
+  addresses: string[];
+  created: string;
+  lastSeen: string;
+  keyExpiryDisabled: boolean;
+  expires: string;
+  authorized: boolean;
+  isExternal: boolean;
+  tags: string[];
+  blocksIncomingConnections: boolean;
+  advertisedRoutes: string[];
+  enabledRoutes: string[];
+  online: boolean;
+}
+
+export interface TailscaleDeviceRoutes {
+  advertisedRoutes: string[];
+  enabledRoutes: string[];
+}
+
 export interface UpdateCheckResult {
   platform: "desktop" | "android" | string;
   current_version: string;

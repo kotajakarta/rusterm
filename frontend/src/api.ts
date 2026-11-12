@@ -46,6 +46,13 @@ import type {
   CFSyncPushIn,
   CFSyncPushOut,
   CFSyncStatusOut,
+  TailscaleAccount,
+  TailscaleAccountIn,
+  TailscaleAccountUpdateIn,
+  TailscaleAccountVerifyIn,
+  TailscaleVerifyOut,
+  TailscaleDevice,
+  TailscaleDeviceRoutes,
 } from "./types";
 
 /** Session token: embedded in the page by the backend; `?token=` is the Vite dev-server fallback. */
@@ -372,6 +379,34 @@ export const api = {
   cfSyncNow: (body: CFSyncNowIn) => request<CFSyncNowOut>("POST", "/api/cf/sync/sync-now", body),
   cfSyncPush: (body: CFSyncPushIn) => request<CFSyncPushOut>("POST", "/api/cf/sync/push", body),
   cfSyncPull: (body: CFSyncPullIn) => request<CFSyncPullOut>("POST", "/api/cf/sync/pull", body),
+
+  // Tailscale
+  tailscaleListAccounts: () => request<TailscaleAccount[]>("GET", "/api/tailscale/accounts"),
+  tailscaleVerifyToken: (apiKey: string, tailnet = "-") =>
+    request<TailscaleVerifyOut>("POST", "/api/tailscale/accounts/verify", { api_key: apiKey, tailnet }),
+  tailscaleCreateAccount: (body: TailscaleAccountIn) =>
+    request<TailscaleAccount>("POST", "/api/tailscale/accounts", body),
+  tailscaleUpdateAccount: (accountId: number, body: TailscaleAccountUpdateIn) =>
+    request<TailscaleAccount>("PUT", `/api/tailscale/accounts/${accountId}`, body),
+  tailscaleDeleteAccount: (accountId: number) =>
+    request<{ success: boolean }>("DELETE", `/api/tailscale/accounts/${accountId}`),
+  tailscaleListDevices: (accountId: number) =>
+    request<TailscaleDevice[]>("GET", `/api/tailscale/accounts/${accountId}/devices`),
+  tailscaleGetDevice: (accountId: number, deviceId: string) =>
+    request<TailscaleDevice>("GET", `/api/tailscale/accounts/${accountId}/devices/${deviceId}`),
+  tailscaleDeleteDevice: (accountId: number, deviceId: string) =>
+    request<{ success: boolean }>("DELETE", `/api/tailscale/accounts/${accountId}/devices/${deviceId}`),
+  tailscaleGetDeviceRoutes: (accountId: number, deviceId: string) =>
+    request<TailscaleDeviceRoutes>("GET", `/api/tailscale/accounts/${accountId}/devices/${deviceId}/routes`),
+  tailscaleSetDeviceRoutes: (accountId: number, deviceId: string, routes: string[]) =>
+    request<TailscaleDeviceRoutes>("POST", `/api/tailscale/accounts/${accountId}/devices/${deviceId}/routes`, { routes }),
+  tailscaleSetDeviceAuthorized: (accountId: number, deviceId: string, authorized: boolean) =>
+    request<{ success: boolean }>("POST", `/api/tailscale/accounts/${accountId}/devices/${deviceId}/authorized`, { authorized }),
+  tailscaleSetDeviceKeyExpiry: (accountId: number, deviceId: string, keyExpiryDisabled: boolean) =>
+    request<{ success: boolean }>("POST", `/api/tailscale/accounts/${accountId}/devices/${deviceId}/key`, { key_expiry_disabled: keyExpiryDisabled }),
+  tailscaleSetDeviceTags: (accountId: number, deviceId: string, tags: string[]) =>
+    request<{ success: boolean }>("POST", `/api/tailscale/accounts/${accountId}/devices/${deviceId}/tags`, { tags }),
+
   checkUpdate: () => request<UpdateCheckResult>("GET", "/api/system/update-check"),
   applyUpdate: () => request<UpdateApplyResult>("POST", "/api/system/update-apply"),
   getUpdateProgress: () => request<UpdateProgressResult>("GET", "/api/system/update-progress"),
