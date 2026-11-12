@@ -46,6 +46,18 @@ impl TailscaleClient {
         }
     }
 
+    pub fn build_url(&self, path: &str) -> String {
+        let path_clean = path.trim_start_matches('/');
+        let base = self.base_url.trim_end_matches('/');
+        if base.ends_with("/api/v2") && path_clean.starts_with("api/v2/") {
+            format!("{}/{}", base, &path_clean["api/v2/".len()..])
+        } else if !base.ends_with("/api/v2") && !path_clean.starts_with("api/v2/") {
+            format!("{}/api/v2/{}", base, path_clean)
+        } else {
+            format!("{}/{}", base, path_clean)
+        }
+    }
+
     async fn request<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -53,12 +65,7 @@ impl TailscaleClient {
         token: &str,
         body: Option<serde_json::Value>,
     ) -> Result<T, String> {
-        let clean_path = if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{}", path)
-        };
-        let url = format!("{}{}", self.base_url, clean_path);
+        let url = self.build_url(path);
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -111,15 +118,24 @@ impl TailscaleClient {
     pub async fn verify_token(&self, token: &str, tailnet: &str) -> Result<TailscaleVerifyOut, String> {
         let path = format!("/api/v2/tailnet/{}/devices", tailnet);
         let resp: serde_json::Value = self.request(Method::GET, &path, token, None).await?;
-        let count = resp
-            .get("devices")
-            .and_then(|d| d.as_array())
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let devices_arr = resp.get("devices").and_then(|d| d.as_array());
+        let count = devices_arr.map(|a| a.len()).unwrap_or(0);
+
+        let detected_tailnet = if tailnet == "-" || tailnet.trim().is_empty() {
+            devices_arr
+                .and_then(|a| a.first())
+                .and_then(|dev| dev.get("name"))
+                .and_then(|n| n.as_str())
+                .and_then(|n| n.split_once('.'))
+                .map(|(_, domain)| domain.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        } else {
+            tailnet.to_string()
+        };
 
         Ok(TailscaleVerifyOut {
             valid: true,
-            tailnet: tailnet.to_string(),
+            tailnet: detected_tailnet,
             devices_count: count,
         })
     }
@@ -219,13 +235,7 @@ impl TailscaleClient {
     }
 
     pub async fn delete_device(&self, token: &str, device_id: &str) -> Result<(), String> {
-        let path = format!("/api/v2/device/{}", device_id);
-        let clean_path = if path.starts_with('/') {
-            path
-        } else {
-            format!("/{}", path)
-        };
-        let url = format!("{}{}", self.base_url, clean_path);
+        let url = self.build_url(&format!("/api/v2/device/{}", device_id));
 
         let mut headers = HeaderMap::new();
         headers.insert(

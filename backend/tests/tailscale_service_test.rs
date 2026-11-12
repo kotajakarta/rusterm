@@ -104,6 +104,22 @@ async fn test_tailscale_service_mock_api() {
     assert!(verify_res.valid);
     assert_eq!(verify_res.devices_count, 1);
 
+    // Test URL construction when base_url already contains /api/v2
+    let client_with_prefix = TailscaleClient::with_base_url(&format!("{}/api/v2", mock_base));
+    let verify_prefix = client_with_prefix.verify_token("test_token", "default").await.unwrap();
+    assert!(verify_prefix.valid);
+
+    // Test production default client URL resolution
+    let default_client = TailscaleClient::new();
+    assert_eq!(
+        default_client.build_url("/api/v2/tailnet/-/devices"),
+        "https://api.tailscale.com/api/v2/tailnet/-/devices"
+    );
+    assert_eq!(
+        default_client.build_url("/api/v2/device/12345/routes"),
+        "https://api.tailscale.com/api/v2/device/12345/routes"
+    );
+
     // Test list_devices
     let devices = client.list_devices("test_token", "default").await.unwrap();
     assert_eq!(devices.len(), 1);

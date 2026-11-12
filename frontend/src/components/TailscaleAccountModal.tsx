@@ -37,6 +37,9 @@ export function TailscaleAccountModal({ accounts, onAccountsChanged, onClose }: 
         title: "Koneksi Berhasil",
         detail: `Tailnet: ${res.tailnet} • Terdeteksi ${res.devices_count} mesin`,
       });
+      if (res.tailnet && res.tailnet !== "-") {
+        setTailnet(res.tailnet);
+      }
       if (!name) {
         setName(res.tailnet !== "-" ? res.tailnet : "Tailnet Akun");
       }
