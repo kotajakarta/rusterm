@@ -9,6 +9,15 @@ if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
+if ! command -v npm >/dev/null 2>&1; then
+    for node_dir in "$HOME/.nvm/versions/node"/*/bin; do
+        if [ -d "$node_dir" ]; then
+            export PATH="$node_dir:$PATH"
+            break
+        fi
+    done
+fi
+
 echo "============================================================"
 echo "    RusTerm Windows Standalone Executable (.exe) Build    "
 echo "============================================================"
@@ -38,6 +47,12 @@ echo "==> [3/3] Menyiapkan paket rilis..."
 mkdir -p dist-release
 cp backend/target/x86_64-pc-windows-gnu/release/rusterm.exe dist-release/rusterm.exe
 cp backend/target/x86_64-pc-windows-gnu/release/rusterm.exe dist-release/termdeck.exe
+
+VERSION=$(grep '^version = ' backend/Cargo.toml | head -n 1 | cut -d '"' -f 2)
+if command -v zip >/dev/null 2>&1 && [ -n "$VERSION" ]; then
+    echo "==> Mengompres paket ZIP rilis (rusterm-v${VERSION}-windows-x64.zip)..."
+    (cd dist-release && zip -9 -q -o "rusterm-v${VERSION}-windows-x64.zip" rusterm.exe termdeck.exe)
+fi
 
 echo "==> Berhasil! Binary Windows mandiri tersedia di:"
 ls -lh dist-release/rusterm.exe
