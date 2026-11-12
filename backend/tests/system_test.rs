@@ -26,6 +26,7 @@ async fn test_system_update_check_auth_and_response() {
         vault: vault.clone(),
         pool,
         cf,
+        ts: Default::default(),
         transfers: Default::default(),
     };
 

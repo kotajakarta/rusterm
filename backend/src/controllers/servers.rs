@@ -4,6 +4,7 @@ use crate::models::server::{
     TestServerInput,
 };
 use crate::services::cloudflare::CloudflareClient;
+use crate::services::tailscale::TailscaleClient;
 use crate::services::paste_image::{
     build_paste_request, paste_image_name, sniff_image_type, PASTE_MAX_BYTES,
 };
@@ -25,6 +26,7 @@ pub struct AppState {
     pub vault: Vault,
     pub pool: SshPool,
     pub cf: CloudflareClient,
+    pub ts: TailscaleClient,
     pub transfers: crate::services::transfer::TransferManager,
 }
 

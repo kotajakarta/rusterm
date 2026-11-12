@@ -15,6 +15,7 @@ use xterm_backend::controllers::{
 use xterm_backend::models::db::DbStore;
 use xterm_backend::services::app_launcher;
 use xterm_backend::services::cloudflare::CloudflareClient;
+use xterm_backend::services::tailscale::TailscaleClient;
 use xterm_backend::services::ssh_pool::SshPool;
 use xterm_backend::services::vault::Vault;
 
@@ -85,12 +86,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ssh_pool = SshPool::with_host_keys(db.clone());
 
     let cf_client = CloudflareClient::new();
+    let ts_client = TailscaleClient::new();
 
     let app_state = AppState {
         db: db.clone(),
         vault: vault.clone(),
         pool: ssh_pool.clone(),
         cf: cf_client,
+        ts: ts_client,
         transfers: Default::default(),
     };
 

@@ -27,6 +27,7 @@ async fn test_cloudflare_router_auth_and_status() {
         vault: vault.clone(),
         pool,
         cf,
+        ts: Default::default(),
         transfers: Default::default(),
     };
 

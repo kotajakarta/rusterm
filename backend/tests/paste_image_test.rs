@@ -163,6 +163,7 @@ async fn setup() -> (tempfile::TempDir, axum::Router, String, i64) {
             vault,
             pool: SshPool::new(),
             cf: CloudflareClient::new(),
+            ts: Default::default(),
             transfers: Default::default(),
         }),
     );

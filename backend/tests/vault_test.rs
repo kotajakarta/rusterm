@@ -218,6 +218,7 @@ async fn test_lock_endpoint_requires_session() {
             vault: vault.clone(),
             pool: SshPool::new(),
             cf: CloudflareClient::new(),
+            ts: Default::default(),
             transfers: Default::default(),
         }),
     );

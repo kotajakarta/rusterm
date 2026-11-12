@@ -91,6 +91,7 @@ async fn test_containers_router_auth() {
         vault: vault.clone(),
         pool,
         cf: CloudflareClient::new(),
+        ts: Default::default(),
         transfers: Default::default(),
     };
 

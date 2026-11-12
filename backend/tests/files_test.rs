@@ -46,6 +46,7 @@ async fn test_files_router_auth_and_remotes() {
         vault: vault.clone(),
         pool,
         cf: CloudflareClient::new(),
+        ts: Default::default(),
         transfers: Default::default(),
     };
 
@@ -172,6 +173,7 @@ async fn test_upload_accepts_bodies_above_axum_default_limit() {
             vault,
             pool: SshPool::new(),
             cf: CloudflareClient::new(),
+            ts: Default::default(),
             transfers: Default::default(),
         }),
     );
@@ -224,6 +226,7 @@ async fn transfer_app() -> (tempfile::TempDir, axum::Router, String, i64) {
             vault,
             pool: SshPool::new(),
             cf: CloudflareClient::new(),
+            ts: Default::default(),
             transfers: Default::default(),
         }),
     );
