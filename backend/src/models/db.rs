@@ -1,5 +1,6 @@
 use crate::models::bookmark::{Bookmark, BookmarkInput};
 use crate::models::cloudflare::CFAccount;
+use crate::models::tailscale::TailscaleAccount;
 use crate::models::files::{FileRemote, FileRemoteInput};
 use crate::models::server::{
     BackupBookmark, BackupPayload, BackupServer, BackupSnippet, BackupStats,
@@ -96,6 +97,14 @@ impl DbStore {
                 token TEXT NOT NULL,
                 account_id TEXT NOT NULL,
                 account_name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS tailscale_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                tailnet TEXT NOT NULL DEFAULT '-',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
@@ -928,6 +937,137 @@ impl DbStore {
     pub fn delete_cf_account(&self, id: i64) -> Result<(), DbError> {
         let conn = self.pool.get()?;
         let count = conn.execute("DELETE FROM cf_accounts WHERE id = ?1", params![id])?;
+        if count == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn list_tailscale_accounts(&self) -> Result<Vec<TailscaleAccount>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, api_key, tailnet, created_at
+             FROM tailscale_accounts
+             ORDER BY name ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let token: String = row.get(2)?;
+            let token_masked = if token.len() <= 8 {
+                "••••••••".to_string()
+            } else {
+                let show_len = 4.min(token.len() / 2);
+                format!("{}••••{}", &token[..show_len], &token[token.len() - show_len..])
+            };
+            Ok(TailscaleAccount {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                token_masked,
+                tailnet: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn get_tailscale_account(&self, id: i64) -> Result<Option<(TailscaleAccount, String)>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, api_key, tailnet, created_at
+             FROM tailscale_accounts
+             WHERE id = ?1",
+        )?;
+
+        let mut rows = stmt.query_map([id], |row| {
+            let token: String = row.get(2)?;
+            let token_masked = if token.len() <= 8 {
+                "••••••••".to_string()
+            } else {
+                let show_len = 4.min(token.len() / 2);
+                format!("{}••••{}", &token[..show_len], &token[token.len() - show_len..])
+            };
+            Ok((
+                TailscaleAccount {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    token_masked,
+                    tailnet: row.get(3)?,
+                    created_at: row.get(4)?,
+                },
+                token,
+            ))
+        })?;
+
+        if let Some(r) = rows.next() {
+            Ok(Some(r?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn create_tailscale_account(
+        &self,
+        name: &str,
+        api_key: &str,
+        tailnet: &str,
+    ) -> Result<TailscaleAccount, DbError> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "INSERT INTO tailscale_accounts (name, api_key, tailnet)
+             VALUES (?1, ?2, ?3)",
+            params![name, api_key, tailnet],
+        )?;
+        let id = conn.last_insert_rowid();
+        let (acc, _) = self.get_tailscale_account(id)?.ok_or(DbError::NotFound)?;
+        Ok(acc)
+    }
+
+    pub fn update_tailscale_account(
+        &self,
+        id: i64,
+        name: &str,
+        api_key: Option<&str>,
+        tailnet: Option<&str>,
+    ) -> Result<TailscaleAccount, DbError> {
+        let conn = self.pool.get()?;
+        match (api_key, tailnet) {
+            (Some(tok), Some(tn)) => {
+                conn.execute(
+                    "UPDATE tailscale_accounts SET name = ?1, api_key = ?2, tailnet = ?3 WHERE id = ?4",
+                    params![name, tok, tn, id],
+                )?;
+            }
+            (Some(tok), None) => {
+                conn.execute(
+                    "UPDATE tailscale_accounts SET name = ?1, api_key = ?2 WHERE id = ?3",
+                    params![name, tok, id],
+                )?;
+            }
+            (None, Some(tn)) => {
+                conn.execute(
+                    "UPDATE tailscale_accounts SET name = ?1, tailnet = ?2 WHERE id = ?3",
+                    params![name, tn, id],
+                )?;
+            }
+            (None, None) => {
+                conn.execute(
+                    "UPDATE tailscale_accounts SET name = ?1 WHERE id = ?2",
+                    params![name, id],
+                )?;
+            }
+        }
+        let (acc, _) = self.get_tailscale_account(id)?.ok_or(DbError::NotFound)?;
+        Ok(acc)
+    }
+
+    pub fn delete_tailscale_account(&self, id: i64) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let count = conn.execute("DELETE FROM tailscale_accounts WHERE id = ?1", params![id])?;
         if count == 0 {
             return Err(DbError::NotFound);
         }
