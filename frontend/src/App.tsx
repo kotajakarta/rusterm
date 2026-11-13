@@ -846,6 +846,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             className="btn btn-small btn-primary add-server-btn"
             onClick={() => setDialog({ kind: "server", server: null })}
             title="Tambah Server"
+            aria-label="Tambah Server"
           >
             <Icon name="plus" size={14} /> <span className="btn-label">Server</span>
           </button>
