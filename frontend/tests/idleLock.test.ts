@@ -9,6 +9,12 @@ import {
   normalizeIdleLockMinutes,
 } from "../src/idleLock.ts";
 
+test("DEFAULT_IDLE_LOCK_MINUTES: auto-lock is off unless the user opts in", () => {
+  // Locking closes every SSH session, so it must never kick in on its own by default.
+  assert.equal(DEFAULT_IDLE_LOCK_MINUTES, 0);
+  assert.equal(normalizeIdleLockMinutes(null), 0);
+});
+
 test("normalizeIdleLockMinutes: accepts valid options and falls back to default", () => {
   for (const opt of IDLE_LOCK_OPTIONS) {
     assert.equal(normalizeIdleLockMinutes(opt), opt);

@@ -79,6 +79,8 @@ interface TerminalViewProps {
   onConsumeModifiers?: () => void;
   onStatus: (tabId: string, status: TabStatus) => void;
   onReconnect: (tabId: string) => void;
+  /** Called on every chunk of shell output, so a busy terminal counts as activity. */
+  onActivity?: () => void;
   registerSender: (tabId: string, sender: Sender | null) => void;
   registerController?: (tabId: string, controller: TerminalController | null) => void;
 }
@@ -124,6 +126,7 @@ export function TerminalView({
   onConsumeModifiers,
   onStatus,
   onReconnect,
+  onActivity,
   registerSender,
   registerController,
 }: TerminalViewProps) {
@@ -141,8 +144,8 @@ export function TerminalView({
   const [searchIndex, setSearchIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const openSearchRef = useRef<() => void>(() => {});
-  const callbacks = useRef({ onStatus, onReconnect, onConsumeModifiers, onStepFontSize, onBroadcastData });
-  callbacks.current = { onStatus, onReconnect, onConsumeModifiers, onStepFontSize, onBroadcastData };
+  const callbacks = useRef({ onStatus, onReconnect, onActivity, onConsumeModifiers, onStepFontSize, onBroadcastData });
+  callbacks.current = { onStatus, onReconnect, onActivity, onConsumeModifiers, onStepFontSize, onBroadcastData };
   visibleRef.current = visible;
   modifiersRef.current = modifiers ?? { ctrl: false, alt: false };
 
@@ -554,6 +557,7 @@ export function TerminalView({
     ws.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
       if (typeof event.data !== "string") {
         term.write(new Uint8Array(event.data));
+        callbacks.current.onActivity?.();
         return;
       }
       let msg: ControlMessage;

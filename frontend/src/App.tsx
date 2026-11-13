@@ -327,6 +327,11 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
     writeString(SIDEBAR_WIDTH_KEY, String(DEFAULT_SIDEBAR_WIDTH));
   };
 
+  // Shell output keeps the session "active": a long-running job must not trigger auto-lock.
+  const markTerminalActivity = useCallback(() => {
+    lastActiveRef.current = Date.now();
+  }, []);
+
   const handleChangeIdleLockMinutes = useCallback((next: IdleLockMinutes) => {
     setIdleLockMinutes(next);
     writeString(IDLE_LOCK_KEY, String(next));
@@ -1146,6 +1151,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
                       onConsumeModifiers={resetModifiers}
                       onStatus={setTabStatus}
                       onReconnect={reconnectTab}
+                      onActivity={markTerminalActivity}
                       registerSender={registerSender}
                       registerController={registerController}
                     />

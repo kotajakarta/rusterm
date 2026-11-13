@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 
 import { api, errorMessage } from "../api";
 import {
+  DEFAULT_IDLE_LOCK_MINUTES,
   formatIdleLockLabel,
   IDLE_LOCK_OPTIONS,
   normalizeIdleLockMinutes,
@@ -17,7 +18,11 @@ interface ChangePinProps {
   onChangeIdleLockMinutes?: (minutes: IdleLockMinutes) => void;
 }
 
-export function ChangePin({ onClose, idleLockMinutes = 30, onChangeIdleLockMinutes }: ChangePinProps) {
+export function ChangePin({
+  onClose,
+  idleLockMinutes = DEFAULT_IDLE_LOCK_MINUTES,
+  onChangeIdleLockMinutes,
+}: ChangePinProps) {
   const [oldPin, setOldPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");

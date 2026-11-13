@@ -1,7 +1,8 @@
 export const IDLE_LOCK_KEY = "rusterm.idleLockMinutes";
 export const IDLE_LOCK_OPTIONS = [0, 5, 15, 30, 60] as const;
 export type IdleLockMinutes = (typeof IDLE_LOCK_OPTIONS)[number];
-export const DEFAULT_IDLE_LOCK_MINUTES: IdleLockMinutes = 30;
+/** Off by default: locking disconnects every SSH session and kills what runs in it. */
+export const DEFAULT_IDLE_LOCK_MINUTES: IdleLockMinutes = 0;
 
 /** Normalize a stored or user-supplied value into a valid IdleLockMinutes option. */
 export function normalizeIdleLockMinutes(value: unknown): IdleLockMinutes {
