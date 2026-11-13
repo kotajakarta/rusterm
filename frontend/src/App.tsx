@@ -28,6 +28,13 @@ import { buildCdCommand } from "./shell";
 import type { ModifierState, SpecialKey } from "./mobileKeys";
 import { readString, writeString } from "./storage";
 import {
+  formatIdleLockLabel,
+  IDLE_LOCK_KEY,
+  isIdleExpired,
+  normalizeIdleLockMinutes,
+  type IdleLockMinutes,
+} from "./idleLock";
+import {
   clampSidebarWidth,
   DEFAULT_SIDEBAR_WIDTH,
   resolveSidebarDrag,
@@ -125,6 +132,10 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
   const sidebarWidthRef = useRef(sidebarWidth);
   sidebarWidthRef.current = sidebarWidth;
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [idleLockMinutes, setIdleLockMinutes] = useState<IdleLockMinutes>(() => {
+    return normalizeIdleLockMinutes(readString(IDLE_LOCK_KEY));
+  });
+  const lastActiveRef = useRef<number>(Date.now());
   const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers">("terminal");
   const [filesTargetReq, setFilesTargetReq] = useState<{
     serverId: number;
@@ -315,6 +326,38 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
     sidebarWidthRef.current = DEFAULT_SIDEBAR_WIDTH;
     writeString(SIDEBAR_WIDTH_KEY, String(DEFAULT_SIDEBAR_WIDTH));
   };
+
+  const handleChangeIdleLockMinutes = useCallback((next: IdleLockMinutes) => {
+    setIdleLockMinutes(next);
+    writeString(IDLE_LOCK_KEY, String(next));
+    lastActiveRef.current = Date.now();
+  }, []);
+
+  useEffect(() => {
+    if (idleLockMinutes <= 0) return;
+    lastActiveRef.current = Date.now();
+    const markActive = () => {
+      lastActiveRef.current = Date.now();
+    };
+    window.addEventListener("pointerdown", markActive, { passive: true });
+    window.addEventListener("keydown", markActive, { passive: true });
+    window.addEventListener("wheel", markActive, { passive: true });
+    window.addEventListener("touchstart", markActive, { passive: true });
+
+    const timer = window.setInterval(() => {
+      if (isIdleExpired(lastActiveRef.current, Date.now(), idleLockMinutes)) {
+        void onLock();
+      }
+    }, 15_000);
+
+    return () => {
+      window.removeEventListener("pointerdown", markActive);
+      window.removeEventListener("keydown", markActive);
+      window.removeEventListener("wheel", markActive);
+      window.removeEventListener("touchstart", markActive);
+      window.clearInterval(timer);
+    };
+  }, [idleLockMinutes, onLock]);
 
   const selectTab = useCallback(
     (id: string) => {
@@ -827,8 +870,8 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             type="button"
             className="icon-btn"
             onClick={() => setDialog({ kind: "change-pin" })}
-            title="Ganti PIN"
-            aria-label="Ganti PIN"
+            title="Ganti PIN & Pengaturan Kunci Otomatis"
+            aria-label="Ganti PIN & Pengaturan Kunci Otomatis"
           >
             <Icon name="key" size={15} />
           </button>
@@ -836,7 +879,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             type="button"
             className="icon-btn"
             onClick={() => void onLock()}
-            title="Kunci RusTerm (semua terminal ditutup)"
+            title={`Kunci RusTerm (Kunci otomatis: ${formatIdleLockLabel(idleLockMinutes)})`}
             aria-label="Kunci RusTerm"
           >
             <Icon name="lock" size={15} />
@@ -1054,6 +1097,15 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
                         <Icon name="refresh" size={13} /> Sambung ulang
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => controllers.current.get(tab.id)?.openSearch()}
+                      aria-label="Cari di terminal"
+                      title="Cari di terminal (Ctrl+F)"
+                    >
+                      <Icon name="search" size={13} />
+                    </button>
                     {multiPane && (
                       <button
                         type="button"
@@ -1335,7 +1387,13 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           }}
         />
       )}
-      {dialog?.kind === "change-pin" && <ChangePin onClose={() => setDialog(null)} />}
+      {dialog?.kind === "change-pin" && (
+        <ChangePin
+          onClose={() => setDialog(null)}
+          idleLockMinutes={idleLockMinutes}
+          onChangeIdleLockMinutes={handleChangeIdleLockMinutes}
+        />
+      )}
       {dialog?.kind === "backup" && (
         <ConfigBackupDialog
           onClose={() => setDialog(null)}

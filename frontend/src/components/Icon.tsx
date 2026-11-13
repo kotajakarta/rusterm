@@ -9,6 +9,7 @@ const PATHS = {
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
   close: "M6 6l12 12M18 6L6 18",
   up: "M12 19V5M6 11l6-6 6 6",
+  down: "M12 5v14M6 13l6 6 6-6",
   bolt: "M13 3L5 14h6l-1 7 8-11h-6z",
   server: "M4 5h16v6H4zM4 13h16v6H4zM8 8h.01M8 16h.01",
   lock: "M6 11h12v9H6zM8 11V8a4 4 0 0 1 8 0v3",

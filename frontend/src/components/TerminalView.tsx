@@ -14,7 +14,9 @@ import {
 } from "../lineEdit";
 import { applyModifiers, specialKeySequence, type ModifierState, type SpecialKey } from "../mobileKeys";
 import { formatPastedPaths, pickImages } from "../paste";
+import { findBufferMatches, stepMatchIndex, type BufferSearchMatch } from "../terminalSearch";
 import type { ControlMessage, Tab, TabStatus } from "../types";
+import { Icon } from "./Icon";
 
 const THEME: ITheme = {
   background: "#141c1a",
@@ -52,6 +54,7 @@ export interface TerminalController {
   pasteText: (text: string) => void;
   pasteFiles: (files: File[]) => void;
   focus: () => void;
+  openSearch: () => void;
 }
 
 /** Alt-based shortcuts handled by App; browsers reserve most Ctrl combinations. */
@@ -132,6 +135,12 @@ export function TerminalView({
   const visibleRef = useRef(visible);
   const modifiersRef = useRef<ModifierState>(modifiers ?? { ctrl: false, alt: false });
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchMatches, setSearchMatches] = useState<BufferSearchMatch[]>([]);
+  const [searchIndex, setSearchIndex] = useState(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const openSearchRef = useRef<() => void>(() => {});
   const callbacks = useRef({ onStatus, onReconnect, onConsumeModifiers, onStepFontSize, onBroadcastData });
   callbacks.current = { onStatus, onReconnect, onConsumeModifiers, onStepFontSize, onBroadcastData };
   visibleRef.current = visible;
@@ -189,6 +198,12 @@ export function TerminalView({
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
+      // Ctrl+F / Cmd+F opens the in-terminal search bar.
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.code === "KeyF") {
+        event.preventDefault();
+        openSearchRef.current();
+        return false;
+      }
       // Ctrl+C copies when text is selected; otherwise it is sent as ^C (interrupt).
       if (event.ctrlKey && !event.altKey && event.code === "KeyC" && (event.shiftKey || term.hasSelection())) {
         const selection = term.getSelection();
@@ -490,6 +505,7 @@ export function TerminalView({
         else setNotice({ kind: "bad", text: "Format gambar tidak didukung (PNG, JPEG, GIF, WebP)." });
       },
       focus: () => term.focus(),
+      openSearch: () => openSearchRef.current(),
     });
 
     return () => {
@@ -599,8 +615,118 @@ export function TerminalView({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  const applyMatchSelection = (match: BufferSearchMatch | undefined) => {
+    const term = termRef.current;
+    if (!term) return;
+    if (!match) {
+      term.clearSelection();
+      return;
+    }
+    term.select(match.col, match.row, match.length);
+    const targetTop = Math.max(0, match.row - Math.floor(term.rows / 2));
+    term.scrollToLine(targetTop);
+  };
+
+  const runSearch = (query: string) => {
+    setSearchQuery(query);
+    const term = termRef.current;
+    if (!term || !query) {
+      setSearchMatches([]);
+      setSearchIndex(-1);
+      term?.clearSelection();
+      return;
+    }
+    const buf = term.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      lines.push(buf.getLine(i)?.translateToString(true) ?? "");
+    }
+    const matches = findBufferMatches(lines, query);
+    setSearchMatches(matches);
+    const initialIdx = matches.length > 0 ? matches.length - 1 : -1;
+    setSearchIndex(initialIdx);
+    applyMatchSelection(initialIdx >= 0 ? matches[initialIdx] : undefined);
+  };
+
+  const stepSearch = (delta: 1 | -1) => {
+    if (searchMatches.length === 0) return;
+    const nextIdx = stepMatchIndex(searchIndex, searchMatches.length, delta);
+    setSearchIndex(nextIdx);
+    applyMatchSelection(nextIdx >= 0 ? searchMatches[nextIdx] : undefined);
+  };
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    termRef.current?.clearSelection();
+    termRef.current?.focus();
+  };
+
+  openSearchRef.current = () => {
+    setSearchOpen(true);
+    if (searchQuery) {
+      runSearch(searchQuery);
+    }
+    requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  };
+
   return (
     <div className="terminal-wrap">
+      {searchOpen && (
+        <div className="terminal-search-bar" role="search" aria-label="Cari di terminal">
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="terminal-search-input"
+            placeholder="Cari teks…"
+            value={searchQuery}
+            onChange={(e) => runSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                closeSearch();
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                stepSearch(e.shiftKey ? -1 : 1);
+              }
+            }}
+          />
+          <span className="terminal-search-count" aria-live="polite">
+            {searchQuery ? (searchMatches.length > 0 ? `${searchIndex + 1}/${searchMatches.length}` : "0/0") : ""}
+          </span>
+          <button
+            type="button"
+            className="icon-btn"
+            disabled={searchMatches.length === 0}
+            onClick={() => stepSearch(-1)}
+            title="Sebelumnya (Shift+Enter)"
+            aria-label="Hasil sebelumnya"
+          >
+            <Icon name="up" size={13} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            disabled={searchMatches.length === 0}
+            onClick={() => stepSearch(1)}
+            title="Berikutnya (Enter)"
+            aria-label="Hasil berikutnya"
+          >
+            <Icon name="down" size={13} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={closeSearch}
+            title="Tutup pencarian (Esc)"
+            aria-label="Tutup pencarian"
+          >
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+      )}
       <div className="terminal-host" ref={containerRef} />
       {notice && (
         <div className={`terminal-toast ${notice.kind === "bad" ? "is-bad" : ""}`} role="status">

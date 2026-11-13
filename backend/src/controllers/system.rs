@@ -43,6 +43,38 @@ struct GitHubRelease {
     assets: Vec<GitHubAsset>,
 }
 
+fn parse_semver_parts(version: &str) -> Option<Vec<u64>> {
+    let trimmed = version.trim().trim_start_matches(['v', 'V']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for seg in trimmed.split('.') {
+        let num_str = seg.split(['-', '+']).next().unwrap_or("");
+        if num_str.is_empty() {
+            return None;
+        }
+        parts.push(num_str.parse::<u64>().ok()?);
+    }
+    Some(parts)
+}
+
+/// Returns true only when `latest` is strictly greater than `current` by numeric semver segments.
+pub fn is_newer_version(current: &str, latest: &str) -> bool {
+    let (Some(curr_parts), Some(lat_parts)) = (parse_semver_parts(current), parse_semver_parts(latest)) else {
+        return false;
+    };
+    let len = curr_parts.len().max(lat_parts.len());
+    for i in 0..len {
+        let c = curr_parts.get(i).copied().unwrap_or(0);
+        let l = lat_parts.get(i).copied().unwrap_or(0);
+        if l != c {
+            return l > c;
+        }
+    }
+    false
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/system/update-check", get(check_update))
@@ -78,7 +110,7 @@ async fn check_update(
         Ok(resp) if resp.status().is_success() => {
             if let Ok(release) = resp.json::<GitHubRelease>().await {
                 let latest_tag = release.tag_name.trim_start_matches('v');
-                let has_update = latest_tag != current_version;
+                let has_update = is_newer_version(&current_version, latest_tag);
 
                 // Pick the direct binary asset URL if available
                 #[cfg(target_os = "windows")]
@@ -102,7 +134,7 @@ async fn check_update(
                     .map(|a| a.browser_download_url.clone())
                     .unwrap_or_else(|| {
                         format!(
-                            "https://github.com/kotajakarta/rusterm/releases/download/{}/rusterm.exe",
+                            "https://github.com/kotajakarta/rusterm/releases/download/{}/rusterm",
                             release.tag_name
                         )
                     });

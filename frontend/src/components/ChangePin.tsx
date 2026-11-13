@@ -1,11 +1,23 @@
 import { useState, type FormEvent } from "react";
 
 import { api, errorMessage } from "../api";
+import {
+  formatIdleLockLabel,
+  IDLE_LOCK_OPTIONS,
+  normalizeIdleLockMinutes,
+  type IdleLockMinutes,
+} from "../idleLock";
 import { Modal } from "./Modal";
 
 const PIN_PATTERN = /^\d{4,12}$/;
 
-export function ChangePin({ onClose }: { onClose: () => void }) {
+interface ChangePinProps {
+  onClose: () => void;
+  idleLockMinutes?: IdleLockMinutes;
+  onChangeIdleLockMinutes?: (minutes: IdleLockMinutes) => void;
+}
+
+export function ChangePin({ onClose, idleLockMinutes = 30, onChangeIdleLockMinutes }: ChangePinProps) {
   const [oldPin, setOldPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
@@ -66,6 +78,21 @@ export function ChangePin({ onClose }: { onClose: () => void }) {
         <p className="notice ok">PIN diganti. Database sudah dienkripsi ulang dengan PIN baru.</p>
       ) : (
         <form id="pin-form" className="form" onSubmit={submit}>
+          {onChangeIdleLockMinutes && (
+            <label className="field">
+              <span>Kunci otomatis saat tidak aktif</span>
+              <select
+                value={idleLockMinutes}
+                onChange={(e) => onChangeIdleLockMinutes(normalizeIdleLockMinutes(e.target.value))}
+              >
+                {IDLE_LOCK_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {formatIdleLockLabel(opt)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="field">
             <span>PIN sekarang</span>
             <input

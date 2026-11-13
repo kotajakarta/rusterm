@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode};
 use tempfile::tempdir;
 use tower::ServiceExt;
 use xterm_backend::controllers::servers::AppState;
-use xterm_backend::controllers::system::{self, UpdateCheckResult};
+use xterm_backend::controllers::system::{self, is_newer_version, UpdateCheckResult};
 use xterm_backend::models::db::DbStore;
 use xterm_backend::services::cloudflare::CloudflareClient;
 use xterm_backend::services::ssh_pool::SshPool;
@@ -64,7 +64,7 @@ async fn test_system_update_check_auth_and_response() {
     let check: UpdateCheckResult = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(check.platform, "desktop");
-    assert_eq!(check.current_version, "0.2.4");
+    assert_eq!(check.current_version, env!("CARGO_PKG_VERSION"));
     assert!(check.download_url.is_some());
     let url = check.download_url.unwrap();
     assert!(url.contains("kotajakarta/rusterm"));
@@ -97,4 +97,18 @@ async fn test_system_update_check_auth_and_response() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[test]
+fn test_is_newer_version_semver_comparison() {
+    assert!(!is_newer_version("0.2.6", "0.2.6"));
+    assert!(!is_newer_version("0.2.6", "v0.2.6"));
+    assert!(!is_newer_version("0.2.6", "0.2.5"));
+    assert!(!is_newer_version("0.3.0", "0.2.9"));
+    assert!(is_newer_version("0.2.6", "0.2.7"));
+    assert!(is_newer_version("0.2.6", "v0.3.0"));
+    assert!(is_newer_version("0.2.6", "1.0.0"));
+    assert!(is_newer_version("0.2.6", "0.2.7-beta.1"));
+    assert!(!is_newer_version("0.2.6", "invalid"));
+    assert!(!is_newer_version("0.2.6", ""));
 }
