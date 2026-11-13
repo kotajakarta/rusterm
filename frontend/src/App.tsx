@@ -27,7 +27,14 @@ import {
 import { buildCdCommand } from "./shell";
 import type { ModifierState, SpecialKey } from "./mobileKeys";
 import { readString, writeString } from "./storage";
-import type { Bookmark, Server, Snippet, Tab, TabStatus } from "./types";
+import {
+  clampSidebarWidth,
+  DEFAULT_SIDEBAR_WIDTH,
+  resolveSidebarDrag,
+  SIDEBAR_WIDTH_KEY,
+} from "./sidebarResize";
+import type { Bookmark, Server, Snippet, Tab, TabStatus, UpdateCheckResult } from "./types";
+import { shouldShowHeaderUpdate } from "./updateLogic";
 import { BookmarkForm } from "./components/BookmarkForm";
 import { ChangePin } from "./components/ChangePin";
 import { CommandPalette } from "./components/CommandPalette";
@@ -107,6 +114,17 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
   const [sidebarMini, setSidebarMini] = useState<boolean>(() => {
     return readString("rusterm.sidebarMini", "termdeck.sidebarMini") === "true";
   });
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = readString(SIDEBAR_WIDTH_KEY);
+    if (!saved) return DEFAULT_SIDEBAR_WIDTH;
+    const viewportW = typeof window !== "undefined" ? window.innerWidth : undefined;
+    return clampSidebarWidth(Number(saved), viewportW);
+  });
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const sidebarWidthRef = useRef(sidebarWidth);
+  sidebarWidthRef.current = sidebarWidth;
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers">("terminal");
   const [filesTargetReq, setFilesTargetReq] = useState<{
     serverId: number;
@@ -236,6 +254,67 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    api
+      .checkUpdate()
+      .then((res) => {
+        if (!cancelled) setUpdateInfo(res);
+      })
+      .catch(() => {
+        // Ignore background update check failures (e.g. offline or rate limited)
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sidebarResizing) return;
+
+    const onPointerMove = (e: PointerEvent) => {
+      const left = sidebarRef.current?.getBoundingClientRect().left ?? 0;
+      const rawWidth = e.clientX - left;
+      const result = resolveSidebarDrag(rawWidth, window.innerWidth);
+      if (result.mini) {
+        setSidebarMini(true);
+        writeString("rusterm.sidebarMini", "true");
+        setSidebarResizing(false);
+        return;
+      }
+      setSidebarWidth(result.width);
+      sidebarWidthRef.current = result.width;
+    };
+
+    const onPointerUp = () => {
+      setSidebarResizing(false);
+      writeString(SIDEBAR_WIDTH_KEY, String(sidebarWidthRef.current));
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [sidebarResizing]);
+
+  const onStartSidebarResize = (e: React.PointerEvent) => {
+    if (sidebarMini) return;
+    e.preventDefault();
+    setSidebarResizing(true);
+  };
+
+  const onResetSidebarWidth = () => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+    sidebarWidthRef.current = DEFAULT_SIDEBAR_WIDTH;
+    writeString(SIDEBAR_WIDTH_KEY, String(DEFAULT_SIDEBAR_WIDTH));
+  };
 
   const selectTab = useCallback(
     (id: string) => {
@@ -681,7 +760,10 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
   const homeTargetServer = selectedServer ?? servers[0] ?? null;
 
   return (
-    <div className={`app${sidebarMini ? " is-sidebar-mini" : ""}`}>
+    <div
+      className={`app${sidebarMini ? " is-sidebar-mini" : ""}${sidebarResizing ? " is-sidebar-resizing" : ""}`}
+      style={!sidebarMini ? { ["--sidebar-w" as string]: `${sidebarWidth}px` } : undefined}
+    >
       {sidebarOpen && (
         <div
           className="sidebar-backdrop"
@@ -689,7 +771,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      <aside className={`sidebar${sidebarOpen ? " is-open" : ""}${sidebarMini ? " is-mini" : ""}`}>
+      <aside ref={sidebarRef} className={`sidebar${sidebarOpen ? " is-open" : ""}${sidebarMini ? " is-mini" : ""}`}>
         <header className="brand">
           <span className="brand-mark" aria-hidden="true">
             <Icon name="terminal" size={16} />
@@ -819,6 +901,17 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             }}
           />
         </div>
+        {!sidebarMini && (
+          <div
+            className={`sidebar-resizer${sidebarResizing ? " is-dragging" : ""}`}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Ubah lebar sidebar"
+            onPointerDown={onStartSidebarResize}
+            onDoubleClick={onResetSidebarWidth}
+            title="Geser untuk ubah lebar sidebar (klik ganda untuk reset)"
+          />
+        )}
       </aside>
 
       <main className="workspace">
@@ -843,6 +936,8 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           onOpenPalette={() => setDialog({ kind: "palette" })}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          updateInfo={shouldShowHeaderUpdate(updateInfo) ? updateInfo : null}
+          onOpenUpdate={() => setDialog({ kind: "update" })}
         />
 
         {workspaceMode === "files" && (

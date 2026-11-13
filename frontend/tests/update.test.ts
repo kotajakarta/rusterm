@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { UpdateCheckResult, UpdateProgressResult } from "../src/types.ts";
-import { formatUpdateBytes, getUpdateBadge, getUpdateStatusText } from "../src/updateLogic.ts";
+import { formatUpdateBytes, getUpdateBadge, getUpdateStatusText, shouldShowHeaderUpdate } from "../src/updateLogic.ts";
 
 test("formatUpdateBytes: formats byte sizes accurately", () => {
   assert.equal(formatUpdateBytes(0), "0 B");
@@ -77,4 +77,32 @@ test("getUpdateStatusText: formats progress states accurately", () => {
     message: "Koneksi terputus",
   };
   assert.equal(getUpdateStatusText(error), "Gagal: Koneksi terputus");
+});
+
+test("shouldShowHeaderUpdate: only true when check has_update is true", () => {
+  assert.equal(shouldShowHeaderUpdate(null), false);
+  assert.equal(
+    shouldShowHeaderUpdate({
+      platform: "desktop",
+      current_version: "0.2.4",
+      latest_version: "0.2.4",
+      has_update: false,
+      release_title: null,
+      release_notes: null,
+      download_url: null,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldShowHeaderUpdate({
+      platform: "desktop",
+      current_version: "0.2.4",
+      latest_version: "0.2.5",
+      has_update: true,
+      release_title: "v0.2.5",
+      release_notes: null,
+      download_url: null,
+    }),
+    true,
+  );
 });

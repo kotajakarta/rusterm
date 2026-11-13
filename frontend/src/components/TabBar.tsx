@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { serverColor } from "../format";
-import type { Server, Tab } from "../types";
+import type { Server, Tab, UpdateCheckResult } from "../types";
 import {
   DEFAULT_FONT_SIZE,
   MAX_FONT_SIZE,
@@ -33,6 +33,8 @@ interface TabBarProps {
   onOpenPalette: () => void;
   sidebarOpen?: boolean;
   onToggleSidebar?: () => void;
+  updateInfo?: UpdateCheckResult | null;
+  onOpenUpdate?: () => void;
 }
 
 const STATUS_LABEL: Record<Tab["status"], string> = {
@@ -68,6 +70,8 @@ export function TabBar({
   onOpenPalette,
   sidebarOpen,
   onToggleSidebar,
+  updateInfo,
+  onOpenUpdate,
 }: TabBarProps) {
   const [showSnapPicker, setShowSnapPicker] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -385,6 +389,18 @@ export function TabBar({
         <span>Lompat ke proyek</span>
         <kbd>Alt+P</kbd>
       </button>
+      {updateInfo?.has_update && onOpenUpdate && (
+        <button
+          type="button"
+          className="header-update-btn"
+          onClick={onOpenUpdate}
+          title={`Pembaruan tersedia: v${updateInfo.latest_version} (saat ini v${updateInfo.current_version}) — klik untuk update`}
+          aria-label={`Pembaruan tersedia versi ${updateInfo.latest_version}`}
+        >
+          <span className="header-update-dot" aria-hidden="true" />
+          <span>update</span>
+        </button>
+      )}
     </div>
   );
 }

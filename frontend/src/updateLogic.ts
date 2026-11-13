@@ -14,6 +14,11 @@ export function getUpdateBadge(check: UpdateCheckResult): { label: string; type:
   return { label: "Versi Terbaru", type: "success" };
 }
 
+/** Return true when the header should show the release update indicator. */
+export function shouldShowHeaderUpdate(check: UpdateCheckResult | null): boolean {
+  return Boolean(check?.has_update);
+}
+
 export function getUpdateStatusText(progress: UpdateProgressResult): string {
   switch (progress.state) {
     case "downloading": {
