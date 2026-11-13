@@ -411,7 +411,13 @@ export const api = {
   getUpdateProgress: () => request<UpdateProgressResult>("GET", "/api/system/update-progress"),
 };
 
-export function terminalSocketUrl(serverId: number, bookmarkId: number | null, cols: number, rows: number): string {
+export function terminalSocketUrl(
+  serverId: number,
+  bookmarkId: number | null,
+  cols: number,
+  rows: number,
+  startPath?: string,
+): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const params = new URLSearchParams({
     session,
@@ -420,6 +426,7 @@ export function terminalSocketUrl(serverId: number, bookmarkId: number | null, c
     rows: String(rows),
   });
   if (bookmarkId !== null) params.set("bookmark_id", String(bookmarkId));
+  else if (startPath) params.set("path", startPath);
   return `${proto}://${window.location.host}/ws/terminal?${params.toString()}`;
 }
 

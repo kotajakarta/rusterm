@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
+import { fileBookmarkMap } from "../../fileBookmarks";
 import type {
+  Bookmark,
   FileRemote,
   Server,
   TransferJob,
@@ -16,6 +18,9 @@ interface FilesViewProps {
   activeServerId: number | null;
   onSelectServer: (id: number) => void;
   onOpenTerminal?: (serverId: number, path: string) => void;
+  /** Sidebar paths; the file manager shows them as its bookmarks. */
+  bookmarks: Bookmark[];
+  onToggleBookmark: (serverId: number, path: string) => void;
   targetRequest?: { serverId: number; path?: string; seq: number } | null;
 }
 
@@ -24,6 +29,8 @@ export function FilesView({
   activeServerId,
   onSelectServer,
   onOpenTerminal,
+  bookmarks: sidebarBookmarks,
+  onToggleBookmark,
   targetRequest
 }: FilesViewProps) {
   const [split, setSplit] = useState<boolean>(() => {
@@ -84,14 +91,6 @@ export function FilesView({
   const [clipboard, setClipboard] = useState<ClipboardState | null>(null);
   const [remotes, setRemotes] = useState<FileRemote[]>([]);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
-  const [bookmarks, setBookmarks] = useState<Record<string, string[]>>(() => {
-    try {
-      const raw = localStorage.getItem("td_files_bookmarks");
-      return raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
-    } catch {
-      return {};
-    }
-  });
   const [detailsHost, setDetailsHost] = useState<HTMLDivElement | null>(null);
   const [directPrompt, setDirectPrompt] = useState<{
     mode: "copy" | "move";
@@ -106,74 +105,16 @@ export function FilesView({
   const leftRef = useRef<PaneHandle | null>(null);
   const rightRef = useRef<PaneHandle | null>(null);
 
-  const loadServerBookmarks = useCallback((sid: number) => {
-    if (!sid) return;
-    let localList: string[] = [];
-    try {
-      const raw = localStorage.getItem("td_files_bookmarks");
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, string[]>;
-        localList = parsed[String(sid)] ?? [];
-      }
-    } catch {
-      localList = [];
-    }
-    const req =
-      localList.length > 0
-        ? api.syncFileBookmarks(sid, localList)
-        : api.getFileBookmarks(sid);
-    req
-      .then((list) => {
-        setBookmarks((prev) => {
-          const next = { ...prev, [String(sid)]: list };
-          try {
-            localStorage.setItem("td_files_bookmarks", JSON.stringify(next));
-          } catch {
-            // ignore
-          }
-          return next;
-        });
-      })
-      .catch(() => {});
-  }, []);
-
+  // File-manager bookmarks are the sidebar paths (single source in App); drop the old local cache.
   useEffect(() => {
-    loadServerBookmarks(leftServerId);
-    if (split && rightServerId !== leftServerId) {
-      loadServerBookmarks(rightServerId);
+    try {
+      localStorage.removeItem("td_files_bookmarks");
+    } catch {
+      // ignore
     }
-  }, [leftServerId, rightServerId, split, loadServerBookmarks]);
-
-  const toggleBookmark = useCallback((serverId: number, path: string) => {
-    setBookmarks((prev) => {
-      const key = String(serverId);
-      const list = prev[key] ?? [];
-      const nextList = list.includes(path)
-        ? list.filter((p) => p !== path)
-        : [...list, path].sort();
-      const next = { ...prev, [key]: nextList };
-      try {
-        localStorage.setItem("td_files_bookmarks", JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
-    api
-      .toggleFileBookmark(serverId, path)
-      .then((res) => {
-        setBookmarks((prev) => {
-          const next = { ...prev, [String(serverId)]: res.bookmarks };
-          try {
-            localStorage.setItem("td_files_bookmarks", JSON.stringify(next));
-          } catch {
-            // ignore
-          }
-          return next;
-        });
-      })
-      .catch(() => {});
   }, []);
+
+  const bookmarks = useMemo(() => fileBookmarkMap(sidebarBookmarks), [sidebarBookmarks]);
 
   const loadRemotes = useCallback(() => {
     api
@@ -386,7 +327,7 @@ export function FilesView({
           onJobStarted={(job) => setJobs((prev) => [job, ...prev])}
           onTransferToOther={handleInterServerTransfer}
           bookmarks={bookmarks}
-          onToggleBookmark={toggleBookmark}
+          onToggleBookmark={onToggleBookmark}
           handleRef={(h) => {
             leftRef.current = h;
           }}
@@ -426,7 +367,7 @@ export function FilesView({
             onJobStarted={(job) => setJobs((prev) => [job, ...prev])}
             onTransferToOther={handleInterServerTransfer}
             bookmarks={bookmarks}
-            onToggleBookmark={toggleBookmark}
+            onToggleBookmark={onToggleBookmark}
             handleRef={(h) => {
               rightRef.current = h;
             }}

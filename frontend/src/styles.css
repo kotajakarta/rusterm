@@ -850,6 +850,130 @@ h3 {
   border-top: 1px solid var(--line);
 }
 
+/* ---------- sidebar tools (Snippets / Cloudflare / Tailscale popover) ---------- */
+.sidebar-tools {
+  flex: 0 0 auto;
+  display: flex;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+}
+
+.sidebar-tools-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.sidebar-tools-btn .td-icon {
+  transition: transform 160ms ease;
+}
+
+.sidebar-tools-btn:hover,
+.sidebar-tools-btn.is-open {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.sidebar-tools-btn.is-open .td-icon {
+  transform: rotate(180deg);
+}
+
+.sidebar-tools-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.sidebar.is-mini .sidebar-tools {
+  justify-content: center;
+  padding: 6px 0;
+}
+
+.sidebar.is-mini .sidebar-tools-btn {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* Portalled to <body>. No transform/filter/backdrop-filter here: they would trap the
+   panels' fixed-position dialogs inside the tray. */
+.tools-tray {
+  position: fixed;
+  z-index: 48;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.tools-tray[hidden] {
+  display: none;
+}
+
+.tools-tray-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 2px;
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.tools-tray-tab {
+  flex: 1;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tools-tray-tab:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.tools-tray-tab.is-active {
+  color: var(--accent-ink);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.tools-tray-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.tools-tray-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-top: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.tools-tray-body[hidden] {
+  display: none;
+}
+
 .sidebar-scroll,
 .sidebar-bottom,
 .welcome,

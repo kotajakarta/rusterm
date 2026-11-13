@@ -232,6 +232,8 @@ export interface Tab {
   id: string;
   serverId: number;
   bookmarkId: number | null;
+  /** Folder to start in when the tab has no saved path (file manager "Terminal"). */
+  startPath?: string;
   title: string;
   status: TabStatus;
   /** bumped to force a fresh SSH session in the same tab */

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorMessage, token } from "./api";
+import { findPathBookmark, folderTitle } from "./fileBookmarks";
 import { serverColor } from "./format";
 import {
   activeTabId,
@@ -58,6 +59,7 @@ import { Snippets } from "./components/Snippets";
 import { CloudflarePanel } from "./components/CloudflarePanel";
 import { TailscalePanel } from "./components/TailscalePanel";
 import { TabBar } from "./components/TabBar";
+import { ToolsTray } from "./components/ToolsTray";
 import { isAppShortcut, TerminalView, type Sender, type TerminalController } from "./components/TerminalView";
 import { UpdateModal } from "./components/UpdateModal";
 import { CloudflareSyncModal } from "./components/CloudflareSyncModal";
@@ -453,6 +455,52 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
       }
     },
     [bookmarks, openTab, bumpBookmarkUsage, serverMap],
+  );
+
+  /**
+   * File manager "Terminal": open a shell in `path` without adding it to the sidebar.
+   * A folder that is already a saved path reuses that path (and its open tab).
+   */
+  const openTerminalAtPath = useCallback(
+    (serverId: number, path: string) => {
+      const saved = findPathBookmark(bookmarks, serverId, path);
+      if (saved) {
+        openTab(serverId, saved.id, false);
+        return;
+      }
+      const server = serverMap.get(serverId);
+      if (!server) return;
+      setDialog(null);
+      setSidebarOpen(false);
+      setWorkspaceMode("terminal");
+      tabCounter += 1;
+      const tab: Tab = {
+        id: `tab-${tabCounter}`,
+        serverId,
+        bookmarkId: null,
+        startPath: path,
+        title: `${server.name}: ${folderTitle(path)}`,
+        status: "connecting",
+        session: 0,
+      };
+      setTabs((prev) => [...prev, tab]);
+      setPanes((prev) => showTab(prev, tab.id));
+      setSelectedServerId(serverId);
+    },
+    [bookmarks, openTab, serverMap],
+  );
+
+  /** File manager bookmark = sidebar path: toggle it, then refresh the shared list. */
+  const toggleFileBookmark = useCallback(
+    async (serverId: number, path: string) => {
+      try {
+        await api.toggleFileBookmark(serverId, path);
+      } catch (err) {
+        setLoadError(errorMessage(err));
+      }
+      await reload();
+    },
+    [reload],
   );
 
   const closeTab = useCallback(
@@ -923,31 +971,40 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           />
         </div>
 
-        <div className="sidebar-bottom">
-          {selectedServer && (
+        {selectedServer && (
+          <div className="sidebar-bottom">
             <ServerInfo
               key={selectedServer.id}
               server={selectedServer}
               onOpen={() => openTab(selectedServer.id, null, true)}
               onOpenContainers={() => openContainers(selectedServer.id)}
             />
-          )}
-          <Snippets
-            snippets={snippets}
-            canRun={activeTab?.status === "connected"}
-            onRun={runSnippet}
-            onChanged={() => void reload()}
-          />
-          <CloudflarePanel />
-          <TailscalePanel
-            onQuickSSH={(host, name) => {
-              const existing = servers.find((s) => s.host === host);
-              if (existing) {
-                openTab(existing.id, null, false);
-              } else {
-                setDialog({ kind: "server", server: null, initialValues: { host, name } });
-              }
-            }}
+          </div>
+        )}
+        <div className="sidebar-tools">
+          <ToolsTray
+            mini={sidebarMini}
+            snippets={
+              <Snippets
+                snippets={snippets}
+                canRun={activeTab?.status === "connected"}
+                onRun={runSnippet}
+                onChanged={() => void reload()}
+              />
+            }
+            cloudflare={<CloudflarePanel />}
+            tailscale={
+              <TailscalePanel
+                onQuickSSH={(host, name) => {
+                  const existing = servers.find((s) => s.host === host);
+                  if (existing) {
+                    openTab(existing.id, null, false);
+                  } else {
+                    setDialog({ kind: "server", server: null, initialValues: { host, name } });
+                  }
+                }}
+              />
+            }
           />
         </div>
         {!sidebarMini && (
@@ -995,11 +1052,9 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             activeServerId={selectedServerId ?? activeTab?.serverId ?? servers[0]?.id ?? null}
             onSelectServer={(sid) => setSelectedServerId(sid)}
             targetRequest={filesTargetReq}
-            onOpenTerminal={(srvId, path) => {
-              const folderName =
-                path === "/" ? "Root (/)" : path.split("/").filter(Boolean).pop() || path;
-              void openOrCreatePresetPath(srvId, folderName, path);
-            }}
+            bookmarks={bookmarks}
+            onToggleBookmark={(srvId, path) => void toggleFileBookmark(srvId, path)}
+            onOpenTerminal={openTerminalAtPath}
           />
         )}
 

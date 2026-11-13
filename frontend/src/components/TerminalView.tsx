@@ -542,7 +542,7 @@ export function TerminalView({
     term.write(`${tab.session > 0 ? "\r\n" : ""}${DIM}Menghubungkan ke ${label}…${RESET}\r\n`);
     setStatus("connecting");
 
-    const ws = new WebSocket(terminalSocketUrl(tab.serverId, tab.bookmarkId, term.cols, term.rows));
+    const ws = new WebSocket(terminalSocketUrl(tab.serverId, tab.bookmarkId, term.cols, term.rows, tab.startPath));
     ws.binaryType = "arraybuffer";
     socketRef.current = ws;
     let finished = false;

@@ -1,4 +1,5 @@
 use crate::controllers::servers::AppState;
+use crate::models::bookmark::Bookmark;
 use crate::services::ssh_pool::SshPool;
 use crate::services::shell::{build_cd_command, StartupGate};
 use axum::{
@@ -25,10 +26,26 @@ pub struct WsQuery {
     pub server_id: i64,
     pub session: String,
     pub bookmark_id: Option<i64>,
+    /// Folder to `cd` into when no saved path is given (e.g. "Terminal" in the file manager).
+    pub path: Option<String>,
     #[serde(default = "default_cols")]
     pub cols: u32,
     #[serde(default = "default_rows")]
     pub rows: u32,
+}
+
+/// Command typed into a fresh shell: a saved path of this server wins; otherwise a plain
+/// `cd` into `path` (quoted, never a free-form startup command).
+pub fn resolve_startup_command(
+    bookmark: Option<&Bookmark>,
+    server_id: i64,
+    path: Option<&str>,
+) -> Option<String> {
+    if let Some(bm) = bookmark.filter(|bm| bm.server_id == server_id) {
+        return Some(format!("{}\r", build_cd_command(&bm.path, &bm.startup_cmd)));
+    }
+    let path = path.map(str::trim).filter(|p| !p.is_empty())?;
+    Some(format!("{}\r", build_cd_command(path, "")))
 }
 
 fn default_cols() -> u32 {
@@ -188,11 +205,11 @@ async fn handle_socket(mut socket: WebSocket, query: WsQuery, state: WsAppState)
 
     // Saved path: typed into the shell once it is waiting at its prompt (see StartupGate).
     // Only bookmarks of this server are honoured.
-    let mut startup_cmd: Option<String> = query
+    let bookmark = query
         .bookmark_id
-        .and_then(|bm_id| state.app.db.get_bookmark(bm_id).ok())
-        .filter(|bm| bm.server_id == query.server_id)
-        .map(|bm| format!("{}\r", build_cd_command(&bm.path, &bm.startup_cmd)));
+        .and_then(|bm_id| state.app.db.get_bookmark(bm_id).ok());
+    let mut startup_cmd: Option<String> =
+        resolve_startup_command(bookmark.as_ref(), query.server_id, query.path.as_deref());
     let mut startup_gate = StartupGate::new(tokio::time::Instant::now());
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
@@ -267,5 +284,54 @@ async fn handle_socket(mut socket: WebSocket, query: WsQuery, state: WsAppState)
 
     if !state.pool.is_session_alive(query.server_id).await {
         state.pool.disconnect(query.server_id).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_startup_command;
+    use crate::models::bookmark::Bookmark;
+
+    fn bm(server_id: i64, path: &str) -> Bookmark {
+        Bookmark {
+            id: 1,
+            server_id,
+            name: "x".to_string(),
+            path: path.to_string(),
+            startup_cmd: String::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_startup_prefers_own_bookmark() {
+        let b = bm(7, "/srv/a");
+        assert_eq!(
+            resolve_startup_command(Some(&b), 7, Some("/other")),
+            Some("cd -- /srv/a && clear\r".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_startup_ignores_foreign_bookmark() {
+        let b = bm(8, "/srv/a");
+        assert_eq!(resolve_startup_command(Some(&b), 7, None), None);
+    }
+
+    #[test]
+    fn resolve_startup_uses_quoted_path_without_bookmark() {
+        assert_eq!(
+            resolve_startup_command(None, 7, Some("/var/www/my app")),
+            Some("cd -- '/var/www/my app' && clear\r".to_string())
+        );
+        assert_eq!(
+            resolve_startup_command(None, 7, Some("/x/$(rm -rf ~)")),
+            Some("cd -- '/x/$(rm -rf ~)' && clear\r".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_startup_skips_blank_path() {
+        assert_eq!(resolve_startup_command(None, 7, Some("  ")), None);
+        assert_eq!(resolve_startup_command(None, 7, None), None);
     }
 }
