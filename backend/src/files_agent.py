@@ -728,10 +728,323 @@ def op_unpack(req, stream):
             raise
     return counts
 
+DEFAULT_SEARCH_EXCLUDES = [
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    ".next",
+    ".nuxt",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".idea",
+    ".vscode",
+    "coverage",
+    ".cache",
+    "*.min.js",
+    "*.min.css",
+    "*.lock",
+    "package-lock.json",
+    "Cargo.lock",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+]
+
+def _compile_search_pattern(query, case_sensitive, whole_word, use_regex):
+    if not isinstance(query, str) or not query:
+        raise AgentError("Search query cannot be empty")
+    pat = query if use_regex else re.escape(query)
+    if whole_word:
+        pat = r"\b(?:" + pat + r")\b"
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        return re.compile(pat, flags)
+    except re.error as e:
+        raise AgentError("Invalid regex pattern: " + str(e))
+
+def _build_search_rules(root, exclude_list, use_gitignore, include_list):
+    if exclude_list is None:
+        patterns = list(DEFAULT_SEARCH_EXCLUDES)
+    else:
+        patterns = [str(p) for p in exclude_list if str(p).strip()]
+    if use_gitignore:
+        gi_path = os.path.join(root, ".gitignore")
+        try:
+            if os.path.isfile(fs(gi_path)):
+                with open(fs(gi_path), "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            patterns.append(line)
+        except OSError:
+            pass
+    exclude_rules = IgnoreRules(patterns)
+    inc_clean = [str(p).strip() for p in (include_list or []) if str(p).strip()]
+    include_rules = IgnoreRules(inc_clean) if inc_clean else None
+    return exclude_rules, include_rules
+
+def _walk_searchable_files(root, rel, exclude_rules, include_rules):
+    cur_dir = root if rel == "." else os.path.join(root, rel)
+    try:
+        with os.scandir(fs(cur_dir)) as it:
+            children = sorted(it, key=lambda d: d.name)
+    except OSError:
+        return
+    for de in children:
+        name = os.fsdecode(de.name)
+        child_rel = name if rel == "." else rel + "/" + name
+        try:
+            st = de.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        is_dir = stat.S_ISDIR(st.st_mode)
+        if exclude_rules.match(child_rel, is_dir):
+            continue
+        if is_dir:
+            for item in _walk_searchable_files(root, child_rel, exclude_rules, include_rules):
+                yield item
+        elif stat.S_ISREG(st.st_mode):
+            if include_rules is not None and not include_rules.match(child_rel, False):
+                continue
+            yield child_rel, os.path.join(root, child_rel), st
+
+def _read_text_for_search(full_path, st, max_file_bytes):
+    if st.st_size > max_file_bytes:
+        return "large", None
+    try:
+        with open(fs(full_path), "rb") as f:
+            data = f.read(max_file_bytes + 1)
+    except OSError:
+        return "error", None
+    if len(data) > max_file_bytes:
+        return "large", None
+    if b"\x00" in data[:8192]:
+        return "binary", None
+    try:
+        return "ok", data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "binary", None
+
+def _clip_match_line(line_text, start, end, limit=300):
+    if len(line_text) <= limit:
+        return line_text, start, end
+    match_len = end - start
+    if match_len >= limit:
+        clipped = line_text[start:start + limit]
+        return clipped, 0, len(clipped)
+    pad = (limit - match_len) // 2
+    win_start = max(0, start - pad)
+    win_end = min(len(line_text), win_start + limit)
+    win_start = max(0, win_end - limit)
+    prefix = "..." if win_start > 0 else ""
+    suffix = "..." if win_end < len(line_text) else ""
+    clipped = prefix + line_text[win_start:win_end] + suffix
+    offset = len(prefix) - win_start
+    return clipped, start + offset, end + offset
+
+def _atomic_write_existing(path, st, content_bytes):
+    tmp = _private_tmp_name(os.path.dirname(path))
+    fd = os.open(fs(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content_bytes)
+            try:
+                os.fchown(f.fileno(), st.st_uid, st.st_gid)
+            except OSError:
+                pass
+            os.fchmod(f.fileno(), stat.S_IMODE(st.st_mode))
+        os.replace(fs(tmp), fs(path))
+    except BaseException:
+        if os.path.lexists(fs(tmp)):
+            os.unlink(fs(tmp))
+        raise
+
+def op_search(req):
+    root = norm(req["path"])
+    if not os.path.isdir(fs(root)):
+        raise AgentError("Search path is not a directory: " + root)
+    rx = _compile_search_pattern(
+        req.get("query", ""),
+        bool(req.get("case_sensitive")),
+        bool(req.get("whole_word")),
+        bool(req.get("use_regex")),
+    )
+    use_gitignore = req.get("use_gitignore", True)
+    exclude_rules, include_rules = _build_search_rules(
+        root, req.get("exclude"), use_gitignore, req.get("include")
+    )
+    max_results = max(1, min(int(req.get("max_results") or 500), 2000))
+    max_file_bytes = max(1024, min(int(req.get("max_file_bytes") or MAX_READ_BYTES), 10 * 1024 * 1024))
+
+    files_out = []
+    files_scanned = 0
+    total_matches = 0
+    skipped_binary = 0
+    skipped_large = 0
+    truncated = False
+
+    for rel_path, full_path, st in _walk_searchable_files(root, ".", exclude_rules, include_rules):
+        status, text = _read_text_for_search(full_path, st, max_file_bytes)
+        if status == "binary":
+            skipped_binary += 1
+            continue
+        if status == "large":
+            skipped_large += 1
+            continue
+        if status != "ok":
+            continue
+        files_scanned += 1
+        file_matches = []
+        for lineno, raw_line in enumerate(text.splitlines(), 1):
+            for m in rx.finditer(raw_line):
+                if total_matches >= max_results:
+                    truncated = True
+                    break
+                m_start, m_end = m.start(), m.end()
+                clipped, c_start, c_end = _clip_match_line(raw_line, m_start, m_end)
+                file_matches.append({
+                    "line": lineno,
+                    "col": m_start + 1,
+                    "text": clipped,
+                    "match_start": c_start,
+                    "match_end": c_end,
+                })
+                total_matches += 1
+            if truncated:
+                break
+        if file_matches:
+            files_out.append({
+                "path": full_path,
+                "rel_path": rel_path,
+                "mtime": st.st_mtime,
+                "match_count": len(file_matches),
+                "matches": file_matches,
+            })
+        if truncated:
+            break
+
+    return {
+        "path": root,
+        "files": files_out,
+        "files_scanned": files_scanned,
+        "files_matched": len(files_out),
+        "total_matches": total_matches,
+        "skipped_binary": skipped_binary,
+        "skipped_large": skipped_large,
+        "truncated": truncated,
+    }
+
+def op_replace(req):
+    root = norm(req["path"])
+    if not os.path.isdir(fs(root)):
+        raise AgentError("Replace path is not a directory: " + root)
+    replacement = req.get("replacement", "")
+    if not isinstance(replacement, str):
+        raise AgentError("Replacement must be a string")
+    use_regex = bool(req.get("use_regex"))
+    rx = _compile_search_pattern(
+        req.get("query", ""),
+        bool(req.get("case_sensitive")),
+        bool(req.get("whole_word")),
+        use_regex,
+    )
+    max_file_bytes = max(1024, min(int(req.get("max_file_bytes") or MAX_READ_BYTES), 10 * 1024 * 1024))
+    real_root = os.path.realpath(fs(root))
+
+    targets = req.get("targets")
+    modified_files = []
+    errors = []
+    total_replacements = 0
+
+    def _replace_one(full_path, rel_path, expected_mtime=None):
+        nonlocal total_replacements
+        if full_path in PROTECTED:
+            errors.append({"path": full_path, "error": "Refusing to modify protected system path"})
+            return
+        try:
+            lst = os.lstat(fs(full_path))
+        except OSError as e:
+            errors.append({"path": full_path, "error": str(e)})
+            return
+        if stat.S_ISLNK(lst.st_mode) or not stat.S_ISREG(lst.st_mode):
+            errors.append({"path": full_path, "error": "Target is not a regular file"})
+            return
+        real_target = os.path.realpath(fs(full_path))
+        if not _within(real_target, real_root):
+            errors.append({"path": full_path, "error": "Target path is outside target directory"})
+            return
+        if expected_mtime is not None and abs(lst.st_mtime - float(expected_mtime)) > 1e-6:
+            errors.append({"path": full_path, "error": "File changed on disk since last search"})
+            return
+        status, text = _read_text_for_search(full_path, lst, max_file_bytes)
+        if status == "large":
+            errors.append({"path": full_path, "error": "File is too large"})
+            return
+        if status == "binary":
+            errors.append({"path": full_path, "error": "Binary or non-UTF-8 file"})
+            return
+        if status != "ok":
+            errors.append({"path": full_path, "error": "Failed to read file"})
+            return
+        try:
+            if use_regex:
+                new_text, count = rx.subn(replacement, text)
+            else:
+                new_text, count = rx.subn(lambda _m: replacement, text)
+        except re.error as e:
+            raise AgentError("Invalid replacement pattern: " + str(e))
+        if count <= 0:
+            return
+        try:
+            _atomic_write_existing(full_path, lst, new_text.encode("utf-8"))
+        except OSError as e:
+            errors.append({"path": full_path, "error": str(e)})
+            return
+        total_replacements += count
+        modified_files.append({
+            "path": full_path,
+            "rel_path": rel_path,
+            "replacements": count,
+        })
+
+    if targets is not None:
+        for t in targets:
+            if isinstance(t, str):
+                raw_p, exp_m = t, None
+            else:
+                raw_p = t.get("path", "")
+                exp_m = t.get("expected_mtime")
+            try:
+                tpath = norm(raw_p)
+            except AgentError as e:
+                errors.append({"path": str(raw_p), "error": str(e)})
+                continue
+            rel = os.path.relpath(tpath, root)
+            _replace_one(tpath, rel, exp_m)
+    else:
+        use_gitignore = req.get("use_gitignore", True)
+        exclude_rules, include_rules = _build_search_rules(
+            root, req.get("exclude"), use_gitignore, req.get("include")
+        )
+        for rel_path, full_path, _st in _walk_searchable_files(root, ".", exclude_rules, include_rules):
+            _replace_one(full_path, rel_path, None)
+
+    return {
+        "path": root,
+        "files_modified": len(modified_files),
+        "total_replacements": total_replacements,
+        "modified_files": modified_files,
+        "errors": errors,
+    }
+
 OPS = {
     "list": op_list, "stat": op_stat, "read": op_read, "write": op_write, "mkdir": op_mkdir,
     "symlink": op_symlink, "rename": op_rename, "paste": op_paste, "delete": op_delete,
     "chmod": op_chmod, "principals": op_principals, "scan": op_scan, "ls": op_ls,
+    "search": op_search, "replace": op_replace,
 }
 
 def main():

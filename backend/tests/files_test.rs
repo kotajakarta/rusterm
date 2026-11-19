@@ -305,3 +305,75 @@ async fn test_direct_transfer_rejects_overlapping_source_and_dest_on_same_server
         );
     }
 }
+
+#[tokio::test]
+async fn test_files_search_and_replace_routes_auth_and_validation() {
+    let (_dir, app, session, id) = transfer_app().await;
+
+    let valid_search = serde_json::json!({
+        "path": "/var/www",
+        "query": "hello"
+    });
+    let valid_replace = serde_json::json!({
+        "path": "/var/www",
+        "query": "hello",
+        "replacement": "world"
+    });
+
+    // Unauthorized
+    assert_eq!(
+        send(&app, "POST", &format!("/api/files/{}/search", id), "", valid_search.clone()).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(&app, "POST", &format!("/api/files/{}/replace", id), "", valid_replace.clone()).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Validation: empty query
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/files/{}/search", id),
+            &session,
+            serde_json::json!({ "path": "/var/www", "query": "" })
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/files/{}/replace", id),
+            &session,
+            serde_json::json!({ "path": "/var/www", "query": "", "replacement": "x" })
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Validation: relative path rejected
+    assert_eq!(
+        send(
+            &app,
+            "POST",
+            &format!("/api/files/{}/search", id),
+            &session,
+            serde_json::json!({ "path": "relative/dir", "query": "hello" })
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Non-existent server returns 404
+    assert_eq!(
+        send(&app, "POST", "/api/files/99999/search", &session, valid_search).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(&app, "POST", "/api/files/99999/replace", &session, valid_replace).await,
+        StatusCode::NOT_FOUND
+    );
+}

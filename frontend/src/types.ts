@@ -132,6 +132,82 @@ export interface FileActionBody {
   recursive?: boolean;
 }
 
+export interface FileSearchBody {
+  path: string;
+  query: string;
+  case_sensitive?: boolean;
+  whole_word?: boolean;
+  use_regex?: boolean;
+  include?: string[];
+  exclude?: string[];
+  use_gitignore?: boolean;
+  max_results?: number;
+}
+
+export interface FileSearchMatch {
+  line: number;
+  col: number;
+  text: string;
+  match_start: number;
+  match_end: number;
+}
+
+export interface FileSearchFileResult {
+  path: string;
+  rel_path: string;
+  mtime: number;
+  match_count: number;
+  matches: FileSearchMatch[];
+}
+
+export interface FileSearchOut {
+  path: string;
+  files: FileSearchFileResult[];
+  files_scanned: number;
+  files_matched: number;
+  total_matches: number;
+  skipped_binary: number;
+  skipped_large: number;
+  truncated: boolean;
+}
+
+export interface FileReplaceTarget {
+  path: string;
+  expected_mtime?: number;
+}
+
+export interface FileReplaceBody {
+  path: string;
+  query: string;
+  replacement: string;
+  case_sensitive?: boolean;
+  whole_word?: boolean;
+  use_regex?: boolean;
+  include?: string[];
+  exclude?: string[];
+  use_gitignore?: boolean;
+  targets?: FileReplaceTarget[];
+}
+
+export interface FileReplaceModified {
+  path: string;
+  rel_path: string;
+  replacements: number;
+}
+
+export interface FileReplaceError {
+  path: string;
+  error: string;
+}
+
+export interface FileReplaceOut {
+  path: string;
+  files_modified: number;
+  total_replacements: number;
+  modified_files: FileReplaceModified[];
+  errors: FileReplaceError[];
+}
+
 export interface FileRemote {
   id: number;
   name: string;

@@ -67,6 +67,7 @@ import {
 } from "./FileIcons";
 import { FileThumb } from "./FileThumb";
 import { FileViewer } from "./FileViewer";
+import { FindReplaceModal } from "./FindReplaceModal";
 import { RemoteDialog, TransferSummary } from "./RemoteSync";
 import {
   formatDate,
@@ -249,6 +250,7 @@ export function FilePane({
   const [permEntry, setPermEntry] = useState<FileEntry | null>(null);
   const [editorEntry, setEditorEntry] = useState<FileEntry | null>(null);
   const [viewerEntry, setViewerEntry] = useState<FileEntry | null>(null);
+  const [searchModalPath, setSearchModalPath] = useState<string | null>(null);
   const [remoteDialog, setRemoteDialog] = useState<{ existing?: FileRemote } | null>(null);
   const [remoteScanConfirm, setRemoteScanConfirm] = useState<RemoteScanConfirmState | null>(null);
   const [uploadConflict, setUploadConflict] = useState<UploadConflictPrompt | null>(null);
@@ -278,6 +280,18 @@ export function FilePane({
   }, [toast]);
 
   const currentPath = listing?.path ?? initialPath ?? "~";
+
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === "f") {
+        ev.preventDefault();
+        setSearchModalPath(currentPath);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, currentPath]);
 
   const onPathChangeRef = useRef(onPathChange);
   useEffect(() => {
@@ -1540,6 +1554,17 @@ export function FilePane({
           }}
         />
 
+        {/* Find & Replace in files */}
+        <button
+          type="button"
+          className="fm-btn fm-btn-sm"
+          onClick={() => setSearchModalPath(currentPath)}
+          title="Find & Replace in files (Ctrl+Shift+F)"
+          aria-label="Find and Replace in files"
+        >
+          <SearchIcon size={14} />
+        </button>
+
         {/* Open Terminal Here */}
         {onOpenTerminal && (
           <button
@@ -2009,6 +2034,20 @@ export function FilePane({
                       <span>Edit as text</span>
                     </button>
                   )}
+                  {!multi && isDir && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContextMenu(null);
+                        setSearchModalPath(
+                          entry.type === "link" ? linkDestination(entry) : entryPath
+                        );
+                      }}
+                    >
+                      <SearchIcon size={14} />
+                      <span>Find &amp; Replace in folder…</span>
+                    </button>
+                  )}
                   {!multi && isDir && onOpenTerminal && (
                     <button
                       type="button"
@@ -2225,6 +2264,16 @@ export function FilePane({
                 <span>Paste{clipboard ? ` (${clipboard.names.length})` : ""}</span>
               </button>
               <div className="fm-menu-sep" />
+              <button
+                type="button"
+                onClick={() => {
+                  setContextMenu(null);
+                  setSearchModalPath(currentPath);
+                }}
+              >
+                <SearchIcon size={14} />
+                <span>Find &amp; Replace in files…</span>
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -2508,6 +2557,31 @@ export function FilePane({
             setPermEntry(null);
             void loadDir(currentPath, true);
             showToast("ok", "Permissions updated");
+          }}
+        />
+      )}
+
+      {searchModalPath && (
+        <FindReplaceModal
+          serverId={serverId}
+          initialPath={searchModalPath}
+          onClose={() => setSearchModalPath(null)}
+          onOpenFile={({ path, relPath, mtime }) => {
+            const name = relPath.split("/").pop() || path.split("/").pop() || path;
+            setEditorEntry({
+              name,
+              path,
+              type: "file",
+              size: 0,
+              mtime,
+              mode: 0o644,
+              perms: "-rw-r--r--",
+              owner: "",
+              group: ""
+            });
+          }}
+          onReplaced={() => {
+            void loadDir(currentPath, true);
           }}
         />
       )}

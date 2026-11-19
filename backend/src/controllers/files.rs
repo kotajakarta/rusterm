@@ -1,7 +1,8 @@
 use crate::controllers::servers::AppState;
 use crate::models::files::{
-    DirectTransferIn, FileActionBody, FileRemote, FileRemoteInput, SyncBookmarksBody,
-    ToggleBookmarkBody, ToggleBookmarkOut, TransferBody,
+    DirectTransferIn, FileActionBody, FileRemote, FileRemoteInput, FileReplaceBody,
+    FileReplaceTarget, FileSearchBody, SyncBookmarksBody, ToggleBookmarkBody, ToggleBookmarkOut,
+    TransferBody,
 };
 use crate::models::server::DecryptedServerCreds;
 use crate::services::transfer::{relative_paths, run_transfer, TransferJob, TransferSpec};
@@ -27,6 +28,8 @@ pub fn router(state: AppState) -> Router {
         .route("/files/:server_id/principals", get(get_principals))
         .route("/files/:server_id/read", get(read_file))
         .route("/files/:server_id/action", post(file_action))
+        .route("/files/:server_id/search", post(search_files))
+        .route("/files/:server_id/replace", post(replace_files))
         .route(
             "/files/:server_id/upload",
             post(upload_file).layer(DefaultBodyLimit::max(UPLOAD_MAX_BYTES)),
@@ -236,6 +239,128 @@ async fn file_action(
 
     let payload = serde_json::to_value(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    let res = state
+        .pool
+        .run_agent(&creds, &payload)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    Ok(Json(res))
+}
+
+async fn search_files(
+    AxumPath(server_id): AxumPath<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FileSearchBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_auth(&headers, None, &state.vault)
+        .await
+        .map_err(|s| (s, "Unauthorized".into()))?;
+
+    if body.query.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Search query cannot be empty".into()));
+    }
+    let clean_path = sanitize_path(&body.path).map_err(|s| (s, "Invalid path".into()))?;
+
+    let kek = state
+        .vault
+        .get_kek()
+        .await
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let creds = state
+        .db
+        .get_server_credentials(server_id, &kek)
+        .map_err(|_| (StatusCode::NOT_FOUND, "Server not found".into()))?;
+
+    let mut payload = json!({
+        "op": "search",
+        "path": clean_path,
+        "query": body.query,
+        "case_sensitive": body.case_sensitive,
+        "whole_word": body.whole_word,
+        "use_regex": body.use_regex,
+        "use_gitignore": body.use_gitignore,
+    });
+    if let Some(include) = body.include {
+        payload["include"] = json!(include);
+    }
+    if let Some(exclude) = body.exclude {
+        payload["exclude"] = json!(exclude);
+    }
+    if let Some(max_results) = body.max_results {
+        payload["max_results"] = json!(max_results);
+    }
+
+    let res = state
+        .pool
+        .run_agent(&creds, &payload)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    Ok(Json(res))
+}
+
+async fn replace_files(
+    AxumPath(server_id): AxumPath<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FileReplaceBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_auth(&headers, None, &state.vault)
+        .await
+        .map_err(|s| (s, "Unauthorized".into()))?;
+
+    if body.query.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Search query cannot be empty".into()));
+    }
+    let clean_path = sanitize_path(&body.path).map_err(|s| (s, "Invalid path".into()))?;
+
+    let sanitized_targets = match body.targets {
+        Some(targets) => {
+            let mut out = Vec::with_capacity(targets.len());
+            for t in targets {
+                let p = sanitize_path(&t.path).map_err(|s| (s, "Invalid target path".into()))?;
+                out.push(FileReplaceTarget {
+                    path: p,
+                    expected_mtime: t.expected_mtime,
+                });
+            }
+            Some(out)
+        }
+        None => None,
+    };
+
+    let kek = state
+        .vault
+        .get_kek()
+        .await
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let creds = state
+        .db
+        .get_server_credentials(server_id, &kek)
+        .map_err(|_| (StatusCode::NOT_FOUND, "Server not found".into()))?;
+
+    let mut payload = json!({
+        "op": "replace",
+        "path": clean_path,
+        "query": body.query,
+        "replacement": body.replacement,
+        "case_sensitive": body.case_sensitive,
+        "whole_word": body.whole_word,
+        "use_regex": body.use_regex,
+        "use_gitignore": body.use_gitignore,
+    });
+    if let Some(include) = body.include {
+        payload["include"] = json!(include);
+    }
+    if let Some(exclude) = body.exclude {
+        payload["exclude"] = json!(exclude);
+    }
+    if let Some(targets) = sanitized_targets {
+        payload["targets"] = json!(targets);
+    }
 
     let res = state
         .pool

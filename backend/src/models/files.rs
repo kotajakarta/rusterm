@@ -133,3 +133,55 @@ pub struct DirectTransferIn {
     #[serde(default)]
     pub use_gitignore: Option<bool>,
 }
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSearchBody {
+    pub path: String,
+    pub query: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub whole_word: bool,
+    #[serde(default)]
+    pub use_regex: bool,
+    #[serde(default)]
+    pub include: Option<Vec<String>>,
+    #[serde(default)]
+    pub exclude: Option<Vec<String>>,
+    #[serde(default = "default_true")]
+    pub use_gitignore: bool,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileReplaceTarget {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_mtime: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileReplaceBody {
+    pub path: String,
+    pub query: String,
+    pub replacement: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub whole_word: bool,
+    #[serde(default)]
+    pub use_regex: bool,
+    #[serde(default)]
+    pub include: Option<Vec<String>>,
+    #[serde(default)]
+    pub exclude: Option<Vec<String>>,
+    #[serde(default = "default_true")]
+    pub use_gitignore: bool,
+    #[serde(default)]
+    pub targets: Option<Vec<FileReplaceTarget>>,
+}

@@ -26,6 +26,10 @@ import type {
   FileReadOut,
   FileRemote,
   FileRemoteInput,
+  FileReplaceBody,
+  FileReplaceOut,
+  FileSearchBody,
+  FileSearchOut,
   ImageItem,
   PastedImage,
   Server,
@@ -220,6 +224,10 @@ export const api = {
     request<FileReadOut>("GET", `/api/files/${serverId}/read?path=${encodeURIComponent(path)}`),
   filesAction: <T = FileEntry>(serverId: number, body: FileActionBody) =>
     request<T>("POST", `/api/files/${serverId}/action`, body),
+  filesSearch: (serverId: number, body: FileSearchBody) =>
+    request<FileSearchOut>("POST", `/api/files/${serverId}/search`, body),
+  filesReplace: (serverId: number, body: FileReplaceBody) =>
+    request<FileReplaceOut>("POST", `/api/files/${serverId}/replace`, body),
   filesUpload: (
     serverId: number,
     dir: string,
