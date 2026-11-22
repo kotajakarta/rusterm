@@ -129,7 +129,24 @@ pub fn clamp_page(page: Option<u64>) -> u64 {
 pub trait DbDriver: Send + Sync {
     async fn test_connection(&self) -> Result<ConnectionTestResult, DbDriverError>;
     async fn list_databases(&self) -> Result<Vec<String>, DbDriverError>;
-    async fn list_tables(&self, database: &str) -> Result<Vec<TableInfo>, DbDriverError>;
+    async fn list_schemas(&self, _database: &str) -> Result<Vec<String>, DbDriverError> {
+        Ok(Vec::new())
+    }
+    async fn create_schema(&self, _database: &str, _name: &str) -> Result<(), DbDriverError> {
+        Err(DbDriverError::Unsupported(
+            "Schema tidak didukung pada engine ini".into(),
+        ))
+    }
+    async fn drop_schema(&self, _database: &str, _name: &str) -> Result<(), DbDriverError> {
+        Err(DbDriverError::Unsupported(
+            "Schema tidak didukung pada engine ini".into(),
+        ))
+    }
+    async fn list_tables(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<TableInfo>, DbDriverError>;
     async fn describe_table(
         &self,
         database: &str,

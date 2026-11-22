@@ -445,8 +445,20 @@ export const api = {
     request<void>("POST", `/api/db/${connId}/databases`, { name }),
   dbDropDatabase: (connId: number, dbName: string) =>
     request<void>("DELETE", `/api/db/${connId}/databases/${encodeURIComponent(dbName)}`),
-  dbListTables: (connId: number, db: string) =>
-    request<DbTableInfo[]>("GET", `/api/db/${connId}/tables?db=${encodeURIComponent(db)}`),
+  dbListSchemas: (connId: number, db: string) =>
+    request<string[]>("GET", `/api/db/${connId}/schemas?db=${encodeURIComponent(db)}`),
+  dbCreateSchema: (connId: number, db: string, name: string) =>
+    request<void>("POST", `/api/db/${connId}/schemas`, { db, name }),
+  dbDropSchema: (connId: number, db: string, schemaName: string) =>
+    request<void>(
+      "DELETE",
+      `/api/db/${connId}/schemas/${encodeURIComponent(schemaName)}?db=${encodeURIComponent(db)}`,
+    ),
+  dbListTables: (connId: number, db: string, schema?: string) => {
+    const q = new URLSearchParams({ db });
+    if (schema) q.set("schema", schema);
+    return request<DbTableInfo[]>("GET", `/api/db/${connId}/tables?${q.toString()}`);
+  },
   dbCreateTable: (connId: number, input: DbCreateTableInput) =>
     request<void>("POST", `/api/db/${connId}/tables`, input),
   dbDropTable: (connId: number, db: string, table: string) =>

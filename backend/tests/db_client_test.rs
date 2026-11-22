@@ -195,11 +195,43 @@ async fn sqlite_full_lifecycle_and_read_only_guard() {
     .await;
     assert_eq!(st, StatusCode::CREATED, "resp: {}", body);
 
+    // List schemas on SQLite returns empty array, create/drop schema returns unsupported (400)
+    let (st, schemas) = send_json(
+        &router,
+        "GET",
+        &format!("/db/{}/schemas?db=main", conn_id),
+        Some(&session),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(schemas, json!([]));
+
+    let (st, _) = send_json(
+        &router,
+        "POST",
+        &format!("/db/{}/schemas", conn_id),
+        Some(&session),
+        Some(json!({ "db": "main", "name": "analytics" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    let (st, _) = send_json(
+        &router,
+        "DELETE",
+        &format!("/db/{}/schemas/analytics?db=main", conn_id),
+        Some(&session),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
     // List tables & describe schema
     let (st, tables) = send_json(
         &router,
         "GET",
-        &format!("/db/{}/tables?db=main", conn_id),
+        &format!("/db/{}/tables?db=main&schema=public", conn_id),
         Some(&session),
         None,
     )
@@ -339,6 +371,26 @@ async fn sqlite_full_lifecycle_and_read_only_guard() {
         &router,
         "DELETE",
         &format!("/db/{}/tables/items?db=main", conn_id),
+        Some(&session),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    let (st, _) = send_json(
+        &router,
+        "POST",
+        &format!("/db/{}/schemas", conn_id),
+        Some(&session),
+        Some(json!({ "db": "main", "name": "analytics" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    let (st, _) = send_json(
+        &router,
+        "DELETE",
+        &format!("/db/{}/schemas/analytics?db=main", conn_id),
         Some(&session),
         None,
     )

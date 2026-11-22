@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
-import { engineLabel } from "../../dbClient";
+import { engineLabel, qualifyTableName, quoteTablePreview } from "../../dbClient";
 import type {
   DbConnection,
   DbTableInfo,
@@ -35,6 +35,10 @@ export function DbWorkspace({
   const [selectedDb, setSelectedDb] = useState<string>("");
   const [loadingDbs, setLoadingDbs] = useState(false);
 
+  const [schemas, setSchemas] = useState<string[]>([]);
+  const [selectedSchema, setSelectedSchema] = useState<string>("");
+  const [loadingSchemas, setLoadingSchemas] = useState(false);
+
   const [tables, setTables] = useState<DbTableInfo[]>([]);
   const [tableFilter, setTableFilter] = useState("");
   const [selectedTable, setSelectedTable] = useState<string>("");
@@ -56,11 +60,19 @@ export function DbWorkspace({
   const [showCreateDb, setShowCreateDb] = useState(false);
   const [newDbName, setNewDbName] = useState("");
   const [dropDbTarget, setDropDbTarget] = useState<string | null>(null);
+  const [showCreateSchema, setShowCreateSchema] = useState(false);
+  const [newSchemaName, setNewSchemaName] = useState("");
+  const [dropSchemaTarget, setDropSchemaTarget] = useState<string | null>(null);
   const [showCreateTable, setShowCreateTable] = useState(false);
   const [dropTableTarget, setDropTableTarget] = useState<string | null>(null);
   const [ddlBusy, setDdlBusy] = useState(false);
 
   const activeConn = connections.find((c) => c.id === selectedConnId) ?? null;
+  const isPostgres = activeConn?.engine === "postgres";
+  const qualifiedSelectedTable =
+    activeConn && selectedTable
+      ? qualifyTableName(activeConn.engine, selectedTable, isPostgres ? selectedSchema : undefined)
+      : "";
 
   const loadConnections = useCallback(async () => {
     setLoadingConns(true);
@@ -86,6 +98,9 @@ export function DbWorkspace({
     setLoadingDbs(true);
     setError(null);
     setDatabases([]);
+    setSelectedDb("");
+    setSchemas([]);
+    setSelectedSchema("");
     setTables([]);
     setSelectedTable("");
     setSchema(null);
@@ -109,6 +124,8 @@ export function DbWorkspace({
     if (!activeConn) {
       setDatabases([]);
       setSelectedDb("");
+      setSchemas([]);
+      setSelectedSchema("");
       setTables([]);
       setSelectedTable("");
       setSchema(null);
@@ -117,7 +134,42 @@ export function DbWorkspace({
     void loadDatabases(activeConn);
   }, [activeConn?.id, loadDatabases]);
 
-  const loadTables = useCallback(async (connId: number, db: string) => {
+  const loadSchemas = useCallback(async (connId: number, db: string, preferSchema?: string) => {
+    if (!db) {
+      setSchemas([]);
+      setSelectedSchema("");
+      setTables([]);
+      setSelectedTable("");
+      setSchema(null);
+      return;
+    }
+    setLoadingSchemas(true);
+    setError(null);
+    setSchemas([]);
+    setSelectedSchema("");
+    setTables([]);
+    setSelectedTable("");
+    setSchema(null);
+    try {
+      const list = await api.dbListSchemas(connId, db);
+      setSchemas(list);
+      const preferred =
+        preferSchema && list.includes(preferSchema)
+          ? preferSchema
+          : list.includes("public")
+            ? "public"
+            : list[0] ?? "";
+      setSelectedSchema(preferred);
+    } catch (err) {
+      setError(errorMessage(err));
+      setSchemas([]);
+      setSelectedSchema("");
+    } finally {
+      setLoadingSchemas(false);
+    }
+  }, []);
+
+  const loadTables = useCallback(async (connId: number, db: string, pgSchema?: string) => {
     if (!db) {
       setTables([]);
       setSelectedTable("");
@@ -127,7 +179,7 @@ export function DbWorkspace({
     setLoadingTables(true);
     setError(null);
     try {
-      const list = await api.dbListTables(connId, db);
+      const list = await api.dbListTables(connId, db, pgSchema);
       setTables(list);
       setSelectedTable((prev) => {
         if (prev && list.some((t) => t.name === prev)) return prev;
@@ -144,8 +196,19 @@ export function DbWorkspace({
 
   useEffect(() => {
     if (!activeConn || !selectedDb) return;
-    void loadTables(activeConn.id, selectedDb);
-  }, [activeConn?.id, selectedDb, loadTables]);
+    if (activeConn.engine === "postgres") {
+      void loadSchemas(activeConn.id, selectedDb);
+    } else {
+      setSchemas([]);
+      setSelectedSchema("");
+      void loadTables(activeConn.id, selectedDb);
+    }
+  }, [activeConn?.id, activeConn?.engine, selectedDb, loadSchemas, loadTables]);
+
+  useEffect(() => {
+    if (!activeConn || activeConn.engine !== "postgres" || !selectedDb || !selectedSchema) return;
+    void loadTables(activeConn.id, selectedDb, selectedSchema);
+  }, [activeConn?.id, activeConn?.engine, selectedDb, selectedSchema, loadTables]);
 
   const loadSchema = useCallback(async (connId: number, db: string, table: string) => {
     if (!db || !table) {
@@ -165,12 +228,12 @@ export function DbWorkspace({
   }, []);
 
   useEffect(() => {
-    if (!activeConn || !selectedDb || !selectedTable) {
+    if (!activeConn || !selectedDb || !qualifiedSelectedTable) {
       setSchema(null);
       return;
     }
-    void loadSchema(activeConn.id, selectedDb, selectedTable);
-  }, [activeConn?.id, selectedDb, selectedTable, loadSchema]);
+    void loadSchema(activeConn.id, selectedDb, qualifiedSelectedTable);
+  }, [activeConn?.id, selectedDb, qualifiedSelectedTable, loadSchema]);
 
   const handleDeleteConn = async () => {
     if (!deleteConnTarget) return;
@@ -219,14 +282,53 @@ export function DbWorkspace({
     }
   };
 
+  const handleCreateSchema = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeConn || !selectedDb || !newSchemaName.trim()) return;
+    setDdlBusy(true);
+    setError(null);
+    try {
+      const name = newSchemaName.trim();
+      await api.dbCreateSchema(activeConn.id, selectedDb, name);
+      setShowCreateSchema(false);
+      setNewSchemaName("");
+      await loadSchemas(activeConn.id, selectedDb, name);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setDdlBusy(false);
+    }
+  };
+
+  const handleDropSchema = async () => {
+    if (!activeConn || !selectedDb || !dropSchemaTarget) return;
+    setDdlBusy(true);
+    setError(null);
+    try {
+      await api.dbDropSchema(activeConn.id, selectedDb, dropSchemaTarget);
+      setDropSchemaTarget(null);
+      await loadSchemas(activeConn.id, selectedDb);
+    } catch (err) {
+      setError(errorMessage(err));
+      setDropSchemaTarget(null);
+    } finally {
+      setDdlBusy(false);
+    }
+  };
+
   const handleDropTable = async () => {
     if (!activeConn || !selectedDb || !dropTableTarget) return;
     setDdlBusy(true);
     setError(null);
     try {
-      await api.dbDropTable(activeConn.id, selectedDb, dropTableTarget);
+      const target = qualifyTableName(
+        activeConn.engine,
+        dropTableTarget,
+        isPostgres ? selectedSchema : undefined,
+      );
+      await api.dbDropTable(activeConn.id, selectedDb, target);
       setDropTableTarget(null);
-      await loadTables(activeConn.id, selectedDb);
+      await loadTables(activeConn.id, selectedDb, isPostgres ? selectedSchema : undefined);
     } catch (err) {
       setError(errorMessage(err));
       setDropTableTarget(null);
@@ -372,7 +474,59 @@ export function DbWorkspace({
           </div>
         )}
 
-        {activeConn && selectedDb && (
+        {activeConn && isPostgres && selectedDb && (
+          <div className="db-db-section">
+            <div className="db-subhead">
+              <span>Schema</span>
+              {!activeConn.read_only && (
+                <div className="db-subhead-acts">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => {
+                      setNewSchemaName("");
+                      setShowCreateSchema(true);
+                    }}
+                    title="Buat schema baru"
+                    aria-label="Buat schema baru"
+                  >
+                    <Icon name="plus" size={13} />
+                  </button>
+                  {selectedSchema && selectedSchema !== "public" && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => setDropSchemaTarget(selectedSchema)}
+                      title={`Drop schema ${selectedSchema}`}
+                      aria-label="Drop schema"
+                    >
+                      <Icon name="trash" size={12} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            <select
+              className="db-select-full"
+              value={selectedSchema}
+              onChange={(e) => setSelectedSchema(e.target.value)}
+              disabled={loadingSchemas || schemas.length === 0}
+              aria-label="Pilih schema"
+            >
+              {schemas.length === 0 ? (
+                <option value="">{loadingSchemas ? "Memuat..." : "(kosong)"}</option>
+              ) : (
+                schemas.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+        )}
+
+        {activeConn && selectedDb && (!isPostgres || Boolean(selectedSchema)) && (
           <div className="db-tables-section">
             <div className="db-subhead">
               <span>Tabel ({tables.length})</span>
@@ -472,6 +626,12 @@ export function DbWorkspace({
                     <span>{selectedDb}</span>
                   </>
                 )}
+                {isPostgres && selectedSchema && (
+                  <>
+                    <span className="db-sep">/</span>
+                    <span>{selectedSchema}</span>
+                  </>
+                )}
                 {selectedTable && innerTab !== "sql" && (
                   <>
                     <span className="db-sep">/</span>
@@ -521,7 +681,7 @@ export function DbWorkspace({
                 <DbDataGrid
                   connection={activeConn}
                   database={selectedDb}
-                  table={selectedTable}
+                  table={qualifiedSelectedTable}
                   schema={schema}
                 />
               ) : (
@@ -599,14 +759,75 @@ export function DbWorkspace({
         />
       )}
 
+      {showCreateSchema && activeConn && selectedDb && (
+        <Modal
+          title={`Buat Schema Baru (${selectedDb})`}
+          onClose={() => setShowCreateSchema(false)}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setShowCreateSchema(false)}
+                disabled={ddlBusy}
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                form="db-create-schema-form"
+                className="btn btn-primary"
+                disabled={ddlBusy}
+              >
+                {ddlBusy ? "Membuat..." : "Buat Schema"}
+              </button>
+            </>
+          }
+        >
+          <form
+            id="db-create-schema-form"
+            className="db-form"
+            onSubmit={(e) => void handleCreateSchema(e)}
+          >
+            <label className="field">
+              <span>Nama Schema</span>
+              <input
+                type="text"
+                value={newSchemaName}
+                onChange={(e) => setNewSchemaName(e.target.value)}
+                placeholder="contoh: analytics"
+                required
+              />
+            </label>
+          </form>
+        </Modal>
+      )}
+
+      {dropSchemaTarget && activeConn && selectedDb && (
+        <DbSqlPreviewModal
+          title="Drop Schema"
+          description={`Hapus schema "${dropSchemaTarget}" dari database "${selectedDb}"? Schema harus kosong (tanpa tabel/objek) agar dapat dihapus.`}
+          sqlPreview={`DROP SCHEMA "${dropSchemaTarget.replace(/"/g, '""')}";`}
+          confirmLabel="Drop Schema"
+          danger
+          requireTypeText={dropSchemaTarget}
+          busy={ddlBusy}
+          onConfirm={() => void handleDropSchema()}
+          onCancel={() => setDropSchemaTarget(null)}
+        />
+      )}
+
       {showCreateTable && activeConn && selectedDb && (
         <DbCreateTableModal
           connId={activeConn.id}
           engine={activeConn.engine}
           database={selectedDb}
+          schema={isPostgres ? selectedSchema : undefined}
           onCreated={(tbl) => {
             setShowCreateTable(false);
-            void loadTables(activeConn.id, selectedDb).then(() => setSelectedTable(tbl));
+            void loadTables(activeConn.id, selectedDb, isPostgres ? selectedSchema : undefined).then(
+              () => setSelectedTable(tbl),
+            );
           }}
           onClose={() => setShowCreateTable(false)}
         />
@@ -615,8 +836,8 @@ export function DbWorkspace({
       {dropTableTarget && activeConn && (
         <DbSqlPreviewModal
           title="Drop Tabel"
-          description={`Hapus tabel "${dropTableTarget}" secara permanen dari database "${selectedDb}"?`}
-          sqlPreview={`DROP TABLE ${activeConn.engine === "mysql" ? `\`${dropTableTarget}\`` : `"${dropTableTarget}"`};`}
+          description={`Hapus tabel "${isPostgres && selectedSchema ? `${selectedSchema}.${dropTableTarget}` : dropTableTarget}" secara permanen dari database "${selectedDb}"?`}
+          sqlPreview={`DROP TABLE ${quoteTablePreview(activeConn.engine, qualifyTableName(activeConn.engine, dropTableTarget, isPostgres ? selectedSchema : undefined))};`}
           confirmLabel="Drop Tabel"
           danger
           requireTypeText={dropTableTarget}

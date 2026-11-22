@@ -113,7 +113,11 @@ impl DbDriver for SqliteDriver {
         Ok(vec!["main".to_string()])
     }
 
-    async fn list_tables(&self, _database: &str) -> Result<Vec<TableInfo>, DbDriverError> {
+    async fn list_tables(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<TableInfo>, DbDriverError> {
         let path = self.file_path.clone();
         let ro = self.read_only;
         tokio::task::spawn_blocking(move || {

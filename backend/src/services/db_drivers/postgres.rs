@@ -262,32 +262,112 @@ impl DbDriver for PostgresDriver {
         Ok(rows.into_iter().map(|r| r.get::<_, String>(0)).collect())
     }
 
-    async fn list_tables(&self, database: &str) -> Result<Vec<TableInfo>, DbDriverError> {
+    async fn list_schemas(&self, database: &str) -> Result<Vec<String>, DbDriverError> {
         let client = self.connect(database).await?;
         let rows = client
             .query(
-                "SELECT t.table_schema, t.table_name, t.table_type,
-                        c.reltuples::bigint
-                 FROM information_schema.tables t
-                 LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
-                 LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = t.table_name
-                 WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema')
-                 ORDER BY t.table_schema ASC, t.table_name ASC",
+                "SELECT nspname
+                 FROM pg_namespace
+                 WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+                   AND nspname NOT LIKE 'pg_toast%'
+                   AND nspname NOT LIKE 'pg_temp_%'
+                 ORDER BY CASE WHEN nspname = 'public' THEN 0 ELSE 1 END, nspname ASC",
                 &[],
             )
             .await
             .map_err(|e| DbDriverError::Query(e.to_string()))?;
+        Ok(rows.into_iter().map(|r| r.get::<_, String>(0)).collect())
+    }
+
+    async fn create_schema(&self, database: &str, name: &str) -> Result<(), DbDriverError> {
+        if self.read_only {
+            return Err(DbDriverError::ReadOnly);
+        }
+        let trimmed = name.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("pg_") || lower == "information_schema" {
+            return Err(DbDriverError::InvalidInput(
+                "Nama schema tidak boleh menggunakan awalan sistem (pg_ / information_schema)"
+                    .into(),
+            ));
+        }
+        let client = self.connect(database).await?;
+        let q = quote_ident(DbEngine::Postgres, trimmed)?;
+        client
+            .batch_execute(&format!("CREATE SCHEMA {}", q))
+            .await
+            .map_err(|e| DbDriverError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn drop_schema(&self, database: &str, name: &str) -> Result<(), DbDriverError> {
+        if self.read_only {
+            return Err(DbDriverError::ReadOnly);
+        }
+        let trimmed = name.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("pg_") || lower == "information_schema" {
+            return Err(DbDriverError::InvalidInput(
+                "Schema sistem tidak boleh dihapus".into(),
+            ));
+        }
+        let client = self.connect(database).await?;
+        let q = quote_ident(DbEngine::Postgres, trimmed)?;
+        client
+            .batch_execute(&format!("DROP SCHEMA {}", q))
+            .await
+            .map_err(|e| DbDriverError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn list_tables(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<TableInfo>, DbDriverError> {
+        let client = self.connect(database).await?;
+        let schema_filter = schema.map(str::trim).filter(|s| !s.is_empty());
+
+        let rows = if let Some(s) = schema_filter {
+            client
+                .query(
+                    "SELECT t.table_schema, t.table_name, t.table_type,
+                            c.reltuples::bigint
+                     FROM information_schema.tables t
+                     LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
+                     LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = t.table_name
+                     WHERE t.table_schema = $1
+                     ORDER BY t.table_name ASC",
+                    &[&s],
+                )
+                .await
+                .map_err(|e| DbDriverError::Query(e.to_string()))?
+        } else {
+            client
+                .query(
+                    "SELECT t.table_schema, t.table_name, t.table_type,
+                            c.reltuples::bigint
+                     FROM information_schema.tables t
+                     LEFT JOIN pg_namespace n ON n.nspname = t.table_schema
+                     LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = t.table_name
+                     WHERE t.table_schema NOT IN ('pg_catalog', 'information_schema')
+                     ORDER BY t.table_schema ASC, t.table_name ASC",
+                    &[],
+                )
+                .await
+                .map_err(|e| DbDriverError::Query(e.to_string()))?
+        };
 
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let schema: String = r.get(0);
+            let row_schema: String = r.get(0);
             let name: String = r.get(1);
             let ttype: String = r.get(2);
             let est: Option<i64> = r.try_get(3).ok().flatten();
-            let display = if schema == "public" {
+            let display = if schema_filter.is_some() || row_schema == "public" {
                 name
             } else {
-                format!("{}.{}", schema, name)
+                format!("{}.{}", row_schema, name)
             };
             let kind = if ttype.to_uppercase().contains("VIEW") {
                 "view".to_string()

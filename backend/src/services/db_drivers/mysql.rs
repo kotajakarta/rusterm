@@ -177,7 +177,11 @@ impl DbDriver for MysqlDriver {
         Ok(dbs)
     }
 
-    async fn list_tables(&self, database: &str) -> Result<Vec<TableInfo>, DbDriverError> {
+    async fn list_tables(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<TableInfo>, DbDriverError> {
         let db = if database.trim().is_empty() {
             self.default_database.trim()
         } else {

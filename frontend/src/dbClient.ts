@@ -96,6 +96,25 @@ function quoteIdentPreview(engine: DbEngine, ident: string): string {
   return `"${ident.replace(/"/g, '""')}"`;
 }
 
+export function qualifyTableName(engine: DbEngine, table: string, schema?: string): string {
+  if (engine !== "postgres") return table;
+  const s = schema?.trim();
+  if (!s || table.includes(".")) return table;
+  return `${s}.${table}`;
+}
+
+export function quoteTablePreview(engine: DbEngine, table: string): string {
+  if (engine === "postgres") {
+    const dotIdx = table.indexOf(".");
+    if (dotIdx > 0 && dotIdx < table.length - 1) {
+      const schemaPart = table.slice(0, dotIdx);
+      const tablePart = table.slice(dotIdx + 1);
+      return `${quoteIdentPreview(engine, schemaPart)}.${quoteIdentPreview(engine, tablePart)}`;
+    }
+  }
+  return quoteIdentPreview(engine, table);
+}
+
 function formatLiteralPreview(val: unknown): string {
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "number" || typeof val === "boolean") return String(val);
@@ -110,7 +129,7 @@ export function buildSqlPreview(
   pk: Record<string, unknown>,
   values: Record<string, unknown>,
 ): string {
-  const qt = quoteIdentPreview(engine, table);
+  const qt = quoteTablePreview(engine, table);
   if (op === "insert") {
     const entries = Object.entries(values);
     const cols = entries.map(([k]) => quoteIdentPreview(engine, k)).join(", ");

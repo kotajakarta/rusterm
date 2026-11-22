@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, errorMessage } from "../../api";
+import { qualifyTableName } from "../../dbClient";
 import type { DbCreateColumnSpec, DbEngine } from "../../types";
 import { Modal } from "../Modal";
 
@@ -7,6 +8,7 @@ interface DbCreateTableModalProps {
   connId: number;
   engine: DbEngine;
   database: string;
+  schema?: string;
   onCreated: (tableName: string) => void;
   onClose: () => void;
 }
@@ -21,6 +23,7 @@ export function DbCreateTableModal({
   connId,
   engine,
   database,
+  schema,
   onCreated,
   onClose,
 }: DbCreateTableModalProps): JSX.Element {
@@ -70,9 +73,10 @@ export function DbCreateTableModal({
 
     setSaving(true);
     try {
+      const targetTable = qualifyTableName(engine, trimmedTable, schema);
       await api.dbCreateTable(connId, {
         db: database,
-        table: trimmedTable,
+        table: targetTable,
         columns: validCols,
       });
       onCreated(trimmedTable);
@@ -85,7 +89,7 @@ export function DbCreateTableModal({
 
   return (
     <Modal
-      title={`Buat Tabel Baru (${database})`}
+      title={`Buat Tabel Baru (${schema ? `${database}.${schema}` : database})`}
       onClose={onClose}
       wide
       footer={

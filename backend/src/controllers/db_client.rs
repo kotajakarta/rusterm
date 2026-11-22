@@ -1,10 +1,10 @@
 use crate::controllers::servers::{check_auth, AppState};
 use crate::models::db::DbError;
 use crate::models::db_client::{
-    ConnectionTestResult, CreateDatabaseRequest, CreateTableRequest, DbConnectionInput,
-    DbConnectionOutput, DecryptedDbConnection, ExecuteQueryRequest, FetchRowsParams, FilterOp,
-    MutationOp, QueryResult, RowFilter, RowMutationRequest, RowMutationResult, RowsPage, TableInfo,
-    TableSchema, TestDbConnectionInput,
+    ConnectionTestResult, CreateDatabaseRequest, CreateSchemaRequest, CreateTableRequest,
+    DbConnectionInput, DbConnectionOutput, DecryptedDbConnection, ExecuteQueryRequest,
+    FetchRowsParams, FilterOp, MutationOp, QueryResult, RowFilter, RowMutationRequest,
+    RowMutationResult, RowsPage, TableInfo, TableSchema, TestDbConnectionInput,
 };
 use crate::services::db_drivers::{clamp_limit, clamp_page, DbDriverError};
 use crate::services::db_pool::DbClientPool;
@@ -78,6 +78,8 @@ pub fn router(state: DbClientAppState) -> Router {
             get(list_databases).post(create_database),
         )
         .route("/db/:id/databases/:db_name", delete(drop_database))
+        .route("/db/:id/schemas", get(list_schemas).post(create_schema))
+        .route("/db/:id/schemas/:schema_name", delete(drop_schema))
         .route("/db/:id/tables", get(list_tables).post(create_table))
         .route("/db/:id/tables/:table", delete(drop_table))
         .route("/db/:id/tables/:table/schema", get(describe_table))
@@ -257,6 +259,13 @@ struct DbQueryParam {
 }
 
 #[derive(Deserialize, Default)]
+struct TablesQueryParam {
+    #[serde(default)]
+    db: String,
+    schema: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
 struct RowsQueryParams {
     #[serde(default)]
     db: String,
@@ -342,11 +351,86 @@ async fn drop_database(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_tables(
+async fn list_schemas(
     State(state): State<DbClientAppState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
     Query(q): Query<DbQueryParam>,
+) -> Result<Json<Vec<String>>, ApiErr> {
+    let kek = require_auth_and_kek(&headers, &state).await?;
+    let conn = state
+        .app
+        .db
+        .get_db_connection_decrypted(id, &kek)
+        .map_err(map_db_err)?;
+    let driver = state
+        .db_pool
+        .build_driver(&conn, &state.app.db, &state.app.pool, &kek)
+        .await
+        .map_err(map_driver_err)?;
+    let schemas = DbClientPool::with_timeout(driver.list_schemas(&q.db))
+        .await
+        .map_err(map_driver_err)?;
+    Ok(Json(schemas))
+}
+
+async fn create_schema(
+    State(state): State<DbClientAppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(req): Json<CreateSchemaRequest>,
+) -> Result<StatusCode, ApiErr> {
+    let kek = require_auth_and_kek(&headers, &state).await?;
+    let conn = state
+        .app
+        .db
+        .get_db_connection_decrypted(id, &kek)
+        .map_err(map_db_err)?;
+    if conn.read_only {
+        return Err(map_driver_err(DbDriverError::ReadOnly));
+    }
+    let driver = state
+        .db_pool
+        .build_driver(&conn, &state.app.db, &state.app.pool, &kek)
+        .await
+        .map_err(map_driver_err)?;
+    DbClientPool::with_timeout(driver.create_schema(&req.db, &req.name))
+        .await
+        .map_err(map_driver_err)?;
+    Ok(StatusCode::CREATED)
+}
+
+async fn drop_schema(
+    State(state): State<DbClientAppState>,
+    headers: HeaderMap,
+    Path((id, schema_name)): Path<(i64, String)>,
+    Query(q): Query<DbQueryParam>,
+) -> Result<StatusCode, ApiErr> {
+    let kek = require_auth_and_kek(&headers, &state).await?;
+    let conn = state
+        .app
+        .db
+        .get_db_connection_decrypted(id, &kek)
+        .map_err(map_db_err)?;
+    if conn.read_only {
+        return Err(map_driver_err(DbDriverError::ReadOnly));
+    }
+    let driver = state
+        .db_pool
+        .build_driver(&conn, &state.app.db, &state.app.pool, &kek)
+        .await
+        .map_err(map_driver_err)?;
+    DbClientPool::with_timeout(driver.drop_schema(&q.db, &schema_name))
+        .await
+        .map_err(map_driver_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_tables(
+    State(state): State<DbClientAppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Query(q): Query<TablesQueryParam>,
 ) -> Result<Json<Vec<TableInfo>>, ApiErr> {
     let kek = require_auth_and_kek(&headers, &state).await?;
     let conn = state
@@ -359,7 +443,7 @@ async fn list_tables(
         .build_driver(&conn, &state.app.db, &state.app.pool, &kek)
         .await
         .map_err(map_driver_err)?;
-    let tables = DbClientPool::with_timeout(driver.list_tables(&q.db))
+    let tables = DbClientPool::with_timeout(driver.list_tables(&q.db, q.schema.as_deref()))
         .await
         .map_err(map_driver_err)?;
     Ok(Json(tables))

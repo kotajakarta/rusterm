@@ -5,6 +5,8 @@ import {
   defaultPortForEngine,
   formatDbValue,
   parseCellInput,
+  qualifyTableName,
+  quoteTablePreview,
   rowsToCsv,
   rowsToJson,
 } from "../src/dbClient.ts";
@@ -43,9 +45,25 @@ test("buildSqlPreview quotes identifiers and escapes literals safely", () => {
     `UPDATE "users" SET "name" = 'O''Brien' WHERE "id" = 5;`,
   );
   assert.equal(
+    buildSqlPreview("postgres", "update", "auth.users", { id: 5 }, { name: "Ada" }),
+    `UPDATE "auth"."users" SET "name" = 'Ada' WHERE "id" = 5;`,
+  );
+  assert.equal(
     buildSqlPreview("mysql", "delete", "items", { id: 9 }, {}),
     "DELETE FROM `items` WHERE `id` = 9;",
   );
+});
+
+test("qualifyTableName and quoteTablePreview handle Postgres schemas", () => {
+  assert.equal(qualifyTableName("postgres", "users", "auth"), "auth.users");
+  assert.equal(qualifyTableName("postgres", "auth.users", "public"), "auth.users");
+  assert.equal(qualifyTableName("postgres", "users", ""), "users");
+  assert.equal(qualifyTableName("mysql", "users", "auth"), "users");
+  assert.equal(qualifyTableName("sqlite", "users", "auth"), "users");
+
+  assert.equal(quoteTablePreview("postgres", "auth.users"), `"auth"."users"`);
+  assert.equal(quoteTablePreview("postgres", "users"), `"users"`);
+  assert.equal(quoteTablePreview("mysql", "a.b"), "`a.b`");
 });
 
 test("rowsToCsv and rowsToJson export properly", () => {

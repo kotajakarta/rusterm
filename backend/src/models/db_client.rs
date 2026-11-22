@@ -329,6 +329,13 @@ pub struct CreateDatabaseRequest {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CreateSchemaRequest {
+    #[serde(default)]
+    pub db: String,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CreateColumnSpec {
     pub name: String,
     pub data_type: String,
