@@ -41,7 +41,16 @@ import {
   resolveSidebarDrag,
   SIDEBAR_WIDTH_KEY,
 } from "./sidebarResize";
-import type { Bookmark, Server, Snippet, Tab, TabStatus, UpdateCheckResult } from "./types";
+import type {
+  Bookmark,
+  ContainerDbHint,
+  DbConnectionPrefill,
+  Server,
+  Snippet,
+  Tab,
+  TabStatus,
+  UpdateCheckResult,
+} from "./types";
 import { shouldShowHeaderUpdate } from "./updateLogic";
 import { BookmarkForm } from "./components/BookmarkForm";
 import { ChangePin } from "./components/ChangePin";
@@ -140,6 +149,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
   });
   const lastActiveRef = useRef<number>(Date.now());
   const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers" | "database">("terminal");
+  const [pendingDbPrefill, setPendingDbPrefill] = useState<DbConnectionPrefill | null>(null);
   const [filesTargetReq, setFilesTargetReq] = useState<{
     serverId: number;
     path?: string;
@@ -1077,6 +1087,23 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             onOpenTerminal={(srvId, startupCmd, title) => {
               void openContainerExecTerminal(srvId, startupCmd, title);
             }}
+            onQuickConnectDb={(srvId: number, hint: ContainerDbHint) => {
+              const srv = servers.find((s) => s.id === srvId);
+              const label = srv ? `${hint.container_name} (${srv.name})` : hint.container_name;
+              setPendingDbPrefill({
+                name: label,
+                engine: hint.engine,
+                host: hint.host,
+                port: hint.port,
+                username: hint.username,
+                password: hint.password,
+                default_database: hint.default_database,
+                ssl_mode: hint.ssl_mode,
+                ssh_server_id: srvId,
+                warning: hint.warning,
+              });
+              setWorkspaceMode("database");
+            }}
           />
         )}
 
@@ -1084,6 +1111,8 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           <DbWorkspace
             servers={servers}
             preferredSshServerId={selectedServerId ?? activeTab?.serverId ?? null}
+            prefill={pendingDbPrefill}
+            onPrefillConsumed={() => setPendingDbPrefill(null)}
           />
         )}
 

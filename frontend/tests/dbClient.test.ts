@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildSqlPreview,
   defaultPortForEngine,
+  detectDbEngineFromContainer,
   formatDbValue,
   parseCellInput,
   qualifyTableName,
@@ -10,6 +11,7 @@ import {
   rowsToCsv,
   rowsToJson,
 } from "../src/dbClient.ts";
+import { formatSyncStats } from "../src/syncLogic.ts";
 import type { DbValue } from "../src/types.ts";
 
 test("defaultPortForEngine returns standard ports", () => {
@@ -84,4 +86,41 @@ test("rowsToCsv and rowsToJson export properly", () => {
     { id: 1, note: 'hello, "world"' },
     { id: 2, note: null },
   ]);
+});
+
+test("detectDbEngineFromContainer identifies postgres, mysql/mariadb, and non-db containers", () => {
+  assert.equal(
+    detectDbEngineFromContainer({ image: "postgres:16-alpine", ports: [] }),
+    "postgres",
+  );
+  assert.equal(
+    detectDbEngineFromContainer({ image: "custom-img", ports: [{ container_port: 5432 }] }),
+    "postgres",
+  );
+  assert.equal(
+    detectDbEngineFromContainer({ image: "mariadb:11", ports: [] }),
+    "mysql",
+  );
+  assert.equal(
+    detectDbEngineFromContainer({ image: "mysql:8", ports: [{ container_port: 3306 }] }),
+    "mysql",
+  );
+  assert.equal(
+    detectDbEngineFromContainer({ image: "nginx:alpine", ports: [{ container_port: 80 }] }),
+    null,
+  );
+});
+
+test("formatSyncStats includes db_connections added and updated counts", () => {
+  const msg = formatSyncStats({
+    servers_added: 1,
+    servers_updated: 0,
+    bookmarks_added: 0,
+    snippets_added: 0,
+    db_connections_added: 2,
+    db_connections_updated: 1,
+  });
+  assert.match(msg, /\+1 server ditambahkan/);
+  assert.match(msg, /\+2 koneksi DB ditambahkan/);
+  assert.match(msg, /1 koneksi DB diperbarui/);
 });

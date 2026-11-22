@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { api, errorMessage } from "../../api";
+import { detectDbEngineFromContainer } from "../../dbClient";
 import type { ContainerActionBody, ContainerItem } from "../../types";
 import { Icon } from "../Icon";
 
@@ -10,6 +11,7 @@ interface ContainerListProps {
   onRefresh: () => void;
   onOpenLogs: (containerId: string, containerName: string) => void;
   onExecTerminal: (containerId: string, containerName: string) => void;
+  onQuickConnectDb?: (containerId: string, containerName: string) => Promise<void> | void;
   onRunNew: () => void;
 }
 
@@ -20,6 +22,7 @@ export function ContainerList({
   onRefresh,
   onOpenLogs,
   onExecTerminal,
+  onQuickConnectDb,
   onRunNew,
 }: ContainerListProps) {
   const [query, setQuery] = useState<string>("");
@@ -98,6 +101,19 @@ export function ContainerList({
         force,
       });
       onRefresh();
+    } catch (err) {
+      setActionError(errorMessage(err));
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handleQuickDb = async (containerId: string, containerName: string) => {
+    if (!onQuickConnectDb) return;
+    setActionBusy(`${containerId}-db`);
+    setActionError(null);
+    try {
+      await onQuickConnectDb(containerId, containerName);
     } catch (err) {
       setActionError(errorMessage(err));
     } finally {
@@ -404,6 +420,25 @@ export function ContainerList({
                           <span>Exec</span>
                         </button>
 
+                        {onQuickConnectDb &&
+                          c.state === "running" &&
+                          detectDbEngineFromContainer(c) !== null && (
+                            <button
+                              type="button"
+                              className="btn-action-sm"
+                              onClick={() => void handleQuickDb(c.id, primaryName)}
+                              disabled={isBusy}
+                              title="Quick-Connect ke Database Client (membaca env & port via inspect)"
+                            >
+                              <Icon
+                                name={actionBusy === `${c.id}-db` ? "refresh" : "database"}
+                                size={12}
+                                className={actionBusy === `${c.id}-db` ? "spin" : ""}
+                              />
+                              <span>DB</span>
+                            </button>
+                          )}
+
                         <button
                           type="button"
                           className="btn-action-sm btn-delete"
@@ -570,6 +605,25 @@ export function ContainerList({
                     >
                       <Icon name="terminal" size={12} /> <span>Exec</span>
                     </button>
+
+                    {onQuickConnectDb &&
+                      c.state === "running" &&
+                      detectDbEngineFromContainer(c) !== null && (
+                        <button
+                          type="button"
+                          className="btn-action"
+                          onClick={() => void handleQuickDb(c.id, primaryName)}
+                          disabled={isBusy}
+                          title="Quick-Connect ke Database Client (membaca env & port via inspect)"
+                        >
+                          <Icon
+                            name={actionBusy === `${c.id}-db` ? "refresh" : "database"}
+                            size={12}
+                            className={actionBusy === `${c.id}-db` ? "spin" : ""}
+                          />{" "}
+                          <span>DB</span>
+                        </button>
+                      )}
 
                     <button
                       type="button"

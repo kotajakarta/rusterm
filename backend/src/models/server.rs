@@ -116,10 +116,32 @@ pub struct BackupSnippet {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BackupDbConnection {
+    pub name: String,
+    pub engine: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub default_database: String,
+    pub file_path: String,
+    pub ssl_mode: String,
+    #[serde(default)]
+    pub ssh_server_name: Option<String>,
+    #[serde(default)]
+    pub ssh_server_host: Option<String>,
+    pub read_only: bool,
+    #[serde(default)]
+    pub color: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BackupPayload {
     pub version: u32,
     pub servers: Vec<BackupServer>,
     pub snippets: Vec<BackupSnippet>,
+    #[serde(default)]
+    pub db_connections: Vec<BackupDbConnection>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -145,5 +167,9 @@ pub struct BackupStats {
     pub servers_updated: i64,
     pub bookmarks_added: i64,
     pub snippets_added: i64,
+    #[serde(default)]
+    pub db_connections_added: i64,
+    #[serde(default)]
+    pub db_connections_updated: i64,
 }
 

@@ -47,6 +47,22 @@ pub struct ContainerLogsOut {
     pub logs: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContainerDbHint {
+    pub container_id: String,
+    pub container_name: String,
+    pub engine: String, // "postgres" | "mysql"
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    pub default_database: String,
+    pub ssl_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageItem {
     pub id: String,
@@ -289,4 +305,212 @@ pub fn normalize_container_item(raw: &serde_json::Value) -> ContainerItem {
         ports,
         command,
     }
+}
+
+/// Ekstrak hint koneksi database (PostgreSQL / MySQL / MariaDB) dari output JSON `docker inspect` atau `podman inspect`.
+pub fn parse_container_db_hint(inspect_json: &serde_json::Value) -> Option<ContainerDbHint> {
+    let obj = if let Some(arr) = inspect_json.as_array() {
+        arr.first()?.as_object()?
+    } else {
+        inspect_json.as_object()?
+    };
+
+    let full_id = obj.get("Id").and_then(|v| v.as_str()).unwrap_or("");
+    let container_id = if full_id.len() > 12 {
+        full_id[..12].to_string()
+    } else {
+        full_id.to_string()
+    };
+
+    let container_name = obj
+        .get("Name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().trim_start_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| container_id.clone());
+
+    let config = obj.get("Config").and_then(|v| v.as_object());
+    let image = config
+        .and_then(|c| c.get("Image"))
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("ImageName").and_then(|v| v.as_str()))
+        .unwrap_or("")
+        .to_lowercase();
+
+    let mut env_map = std::collections::HashMap::<String, String>::new();
+    if let Some(env_arr) = config.and_then(|c| c.get("Env")).and_then(|v| v.as_array()) {
+        for item in env_arr {
+            if let Some(entry) = item.as_str() {
+                if let Some((k, v)) = entry.split_once('=') {
+                    env_map.insert(k.to_string(), v.to_string());
+                }
+            }
+        }
+    }
+
+    let net_settings = obj.get("NetworkSettings").and_then(|v| v.as_object());
+    let ports_obj = net_settings
+        .and_then(|ns| ns.get("Ports"))
+        .and_then(|v| v.as_object());
+    let exposed_obj = config
+        .and_then(|c| c.get("ExposedPorts"))
+        .and_then(|v| v.as_object());
+
+    let has_port = |port_key: &str| -> bool {
+        ports_obj.map(|p| p.contains_key(port_key)).unwrap_or(false)
+            || exposed_obj.map(|p| p.contains_key(port_key)).unwrap_or(false)
+    };
+
+    let is_postgres = image.contains("postgres")
+        || image.contains("postgis")
+        || image.contains("timescaledb")
+        || image.contains("pgvector")
+        || has_port("5432/tcp")
+        || env_map.contains_key("POSTGRES_USER")
+        || env_map.contains_key("POSTGRES_DB")
+        || env_map.contains_key("POSTGRES_PASSWORD");
+
+    let is_mysql = image.contains("mysql")
+        || image.contains("mariadb")
+        || image.contains("percona")
+        || has_port("3306/tcp")
+        || env_map.contains_key("MYSQL_ROOT_PASSWORD")
+        || env_map.contains_key("MYSQL_DATABASE")
+        || env_map.contains_key("MYSQL_USER")
+        || env_map.contains_key("MARIADB_ROOT_PASSWORD")
+        || env_map.contains_key("MARIADB_DATABASE")
+        || env_map.contains_key("MARIADB_USER");
+
+    let (engine, default_port, port_key) = if is_postgres {
+        ("postgres".to_string(), 5432u16, "5432/tcp")
+    } else if is_mysql {
+        ("mysql".to_string(), 3306u16, "3306/tcp")
+    } else {
+        return None;
+    };
+
+    // Cari host port yang ter-publish untuk port DB
+    let mut published_host: Option<String> = None;
+    let mut published_port: Option<u16> = None;
+    if let Some(bindings) = ports_obj.and_then(|p| p.get(port_key)).and_then(|v| v.as_array()) {
+        for b in bindings {
+            if let Some(hp) = b
+                .get("HostPort")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<u16>().ok())
+                .filter(|&p| p > 0)
+            {
+                published_port = Some(hp);
+                let hip = b
+                    .get("HostIp")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if !hip.is_empty() && hip != "0.0.0.0" && hip != "::" {
+                    published_host = Some(hip.to_string());
+                } else {
+                    published_host = Some("127.0.0.1".to_string());
+                }
+                break;
+            }
+        }
+    }
+
+    // Fallback ke IP internal container jika port tidak di-publish ke host
+    let container_ip = net_settings
+        .and_then(|ns| {
+            let direct = ns
+                .get("IPAddress")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            if direct.is_some() {
+                return direct;
+            }
+            ns.get("Networks")
+                .and_then(|v| v.as_object())
+                .and_then(|nets| {
+                    nets.values().find_map(|net| {
+                        net.get("IPAddress")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                    })
+                })
+        });
+
+    let (host, port, warning) = if let Some(hp) = published_port {
+        (published_host.unwrap_or_else(|| "127.0.0.1".to_string()), hp, None)
+    } else if let Some(ip) = container_ip {
+        (
+            ip,
+            default_port,
+            Some("Port container tidak di-publish ke host; menggunakan IP internal container.".to_string()),
+        )
+    } else {
+        (
+            "127.0.0.1".to_string(),
+            default_port,
+            Some("Port container tidak di-publish ke host; pastikan host dan port sesuai.".to_string()),
+        )
+    };
+
+    let (username, password, default_database) = if engine == "postgres" {
+        let user = env_map
+            .get("POSTGRES_USER")
+            .cloned()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "postgres".to_string());
+        let pass = env_map
+            .get("POSTGRES_PASSWORD")
+            .cloned()
+            .filter(|s| !s.is_empty());
+        let db = env_map
+            .get("POSTGRES_DB")
+            .cloned()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| user.clone());
+        (user, pass, db)
+    } else {
+        let custom_user = env_map
+            .get("MYSQL_USER")
+            .or_else(|| env_map.get("MARIADB_USER"))
+            .cloned()
+            .filter(|s| !s.trim().is_empty());
+        let (user, pass) = if let Some(u) = custom_user {
+            let p = env_map
+                .get("MYSQL_PASSWORD")
+                .or_else(|| env_map.get("MARIADB_PASSWORD"))
+                .cloned()
+                .filter(|s| !s.is_empty());
+            (u, p)
+        } else {
+            let p = env_map
+                .get("MYSQL_ROOT_PASSWORD")
+                .or_else(|| env_map.get("MARIADB_ROOT_PASSWORD"))
+                .cloned()
+                .filter(|s| !s.is_empty());
+            ("root".to_string(), p)
+        };
+        let db = env_map
+            .get("MYSQL_DATABASE")
+            .or_else(|| env_map.get("MARIADB_DATABASE"))
+            .cloned()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_default();
+        (user, pass, db)
+    };
+
+    Some(ContainerDbHint {
+        container_id,
+        container_name,
+        engine,
+        host,
+        port,
+        username,
+        password,
+        default_database,
+        ssl_mode: "prefer".to_string(),
+        warning,
+    })
 }

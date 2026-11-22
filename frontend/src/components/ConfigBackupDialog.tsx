@@ -141,7 +141,7 @@ export function ConfigBackupDialog({ onClose, onImportSuccess, onOpenCloudSync }
         <form className="backup-form" onSubmit={handleExport}>
           <p className="backup-desc">
             File backup akan dienkripsi dengan standar <strong>AES-256-GCM</strong>. Berkas ini mencakup seluruh data server,
-            kredensial SSH, daftar path bookmark sidebar, dan snippet agar mudah dipindahkan antar perangkat Android.
+            kredensial SSH, koneksi database, daftar path bookmark sidebar, dan snippet agar mudah dipindahkan antar perangkat.
           </p>
 
           <label className="form-field">
@@ -240,6 +240,8 @@ export function ConfigBackupDialog({ onClose, onImportSuccess, onOpenCloudSync }
                 <li>Server Diperbarui: {importStats.servers_updated}</li>
                 <li>Path Bookmark Sidebar: {importStats.bookmarks_added}</li>
                 <li>Snippet Baru: {importStats.snippets_added}</li>
+                <li>Koneksi Database Baru: {importStats.db_connections_added ?? 0}</li>
+                <li>Koneksi Database Diperbarui: {importStats.db_connections_updated ?? 0}</li>
               </ul>
             </div>
           )}

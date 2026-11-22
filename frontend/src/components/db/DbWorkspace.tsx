@@ -3,6 +3,7 @@ import { api, errorMessage } from "../../api";
 import { engineLabel, qualifyTableName, quoteTablePreview } from "../../dbClient";
 import type {
   DbConnection,
+  DbConnectionPrefill,
   DbTableInfo,
   DbTableSchema,
   Server,
@@ -19,6 +20,8 @@ import { DbStructureView } from "./DbStructureView";
 interface DbWorkspaceProps {
   servers: Server[];
   preferredSshServerId?: number | null;
+  prefill?: DbConnectionPrefill | null;
+  onPrefillConsumed?: () => void;
 }
 
 type InnerTab = "data" | "structure" | "sql";
@@ -26,6 +29,8 @@ type InnerTab = "data" | "structure" | "sql";
 export function DbWorkspace({
   servers,
   preferredSshServerId = null,
+  prefill = null,
+  onPrefillConsumed,
 }: DbWorkspaceProps): JSX.Element {
   const [connections, setConnections] = useState<DbConnection[]>([]);
   const [loadingConns, setLoadingConns] = useState(true);
@@ -52,7 +57,7 @@ export function DbWorkspace({
 
   // Modals
   const [connModal, setConnModal] = useState<
-    | { kind: "create" }
+    | { kind: "create"; prefill?: DbConnectionPrefill | null }
     | { kind: "edit"; conn: DbConnection }
     | null
   >(null);
@@ -93,6 +98,13 @@ export function DbWorkspace({
   useEffect(() => {
     void loadConnections();
   }, [loadConnections]);
+
+  useEffect(() => {
+    if (prefill) {
+      setConnModal({ kind: "create", prefill });
+      onPrefillConsumed?.();
+    }
+  }, [prefill, onPrefillConsumed]);
 
   const loadDatabases = useCallback(async (conn: DbConnection) => {
     setLoadingDbs(true);
@@ -695,6 +707,7 @@ export function DbWorkspace({
       {connModal && (
         <DbConnectionModal
           initial={connModal.kind === "edit" ? connModal.conn : null}
+          prefill={connModal.kind === "create" ? (connModal.prefill ?? null) : null}
           defaultSshServerId={connModal.kind === "create" ? preferredSshServerId : null}
           servers={servers}
           onSaved={(saved) => {

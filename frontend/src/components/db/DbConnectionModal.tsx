@@ -4,6 +4,7 @@ import { defaultPortForEngine } from "../../dbClient";
 import type {
   DbConnection,
   DbConnectionInput,
+  DbConnectionPrefill,
   DbConnectionTestResult,
   DbEngine,
   DbSslMode,
@@ -13,6 +14,7 @@ import { Modal } from "../Modal";
 
 interface DbConnectionModalProps {
   initial?: DbConnection | null;
+  prefill?: DbConnectionPrefill | null;
   defaultSshServerId?: number | null;
   servers: Server[];
   onSaved: (conn: DbConnection) => void;
@@ -21,29 +23,40 @@ interface DbConnectionModalProps {
 
 export function DbConnectionModal({
   initial,
+  prefill = null,
   defaultSshServerId = null,
   servers,
   onSaved,
   onClose,
 }: DbConnectionModalProps): JSX.Element {
-  const [name, setName] = useState(initial?.name ?? "");
-  const [engine, setEngine] = useState<DbEngine>(initial?.engine ?? "postgres");
-  const [host, setHost] = useState(initial?.host ?? "127.0.0.1");
+  const [name, setName] = useState(initial?.name ?? prefill?.name ?? "");
+  const [engine, setEngine] = useState<DbEngine>(initial?.engine ?? prefill?.engine ?? "postgres");
+  const [host, setHost] = useState(initial?.host ?? prefill?.host ?? "127.0.0.1");
   const [port, setPort] = useState(
-    initial ? String(initial.port || defaultPortForEngine(initial.engine)) : "5432",
+    initial
+      ? String(initial.port || defaultPortForEngine(initial.engine))
+      : prefill
+        ? String(prefill.port || defaultPortForEngine(prefill.engine))
+        : "5432",
   );
-  const [username, setUsername] = useState(initial?.username ?? "");
-  const [password, setPassword] = useState("");
+  const [username, setUsername] = useState(initial?.username ?? prefill?.username ?? "");
+  const [password, setPassword] = useState(prefill?.password ?? "");
   const [clearPassword, setClearPassword] = useState(false);
-  const [defaultDatabase, setDefaultDatabase] = useState(initial?.default_database ?? "");
+  const [defaultDatabase, setDefaultDatabase] = useState(
+    initial?.default_database ?? prefill?.default_database ?? "",
+  );
   const [filePath, setFilePath] = useState(initial?.file_path ?? "");
-  const [sslMode, setSslMode] = useState<DbSslMode>(initial?.ssl_mode ?? "prefer");
+  const [sslMode, setSslMode] = useState<DbSslMode>(
+    initial?.ssl_mode ?? prefill?.ssl_mode ?? "prefer",
+  );
   const [sshServerId, setSshServerId] = useState<string>(
     initial?.ssh_server_id
       ? String(initial.ssh_server_id)
-      : defaultSshServerId
-        ? String(defaultSshServerId)
-        : "",
+      : prefill?.ssh_server_id
+        ? String(prefill.ssh_server_id)
+        : defaultSshServerId
+          ? String(defaultSshServerId)
+          : "",
   );
   const [readOnly, setReadOnly] = useState(initial?.read_only ?? false);
   const [saving, setSaving] = useState(false);
@@ -69,7 +82,7 @@ export function DbConnectionModal({
     default_database: engine === "sqlite" ? "" : defaultDatabase.trim(),
     file_path: engine === "sqlite" ? filePath.trim() : "",
     ssl_mode: sslMode,
-    ssh_server_id: engine === "sqlite" ? null : sshServerId ? Number(sshServerId) : null,
+    ssh_server_id: sshServerId ? Number(sshServerId) : null,
     read_only: readOnly,
     color: initial?.color ?? "",
   });
@@ -181,16 +194,33 @@ export function DbConnectionModal({
         </div>
 
         {isSqlite ? (
-          <label className="field">
-            <span>Path File SQLite</span>
-            <input
-              type="text"
-              value={filePath}
-              onChange={(e) => setFilePath(e.target.value)}
-              placeholder="/path/to/database.sqlite"
-              required
-            />
-          </label>
+          <>
+            <label className="field">
+              <span>Path File SQLite</span>
+              <input
+                type="text"
+                value={filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                placeholder={
+                  sshServerId
+                    ? "/var/lib/app/database.sqlite (path di server remote)"
+                    : "/path/to/database.sqlite"
+                }
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Server SSH (opsional — kosongkan untuk file lokal, pilih untuk Remote SQLite via SSH)</span>
+              <select value={sshServerId} onChange={(e) => setSshServerId(e.target.value)}>
+                <option value="">Lokal (host RusTerm ini)</option>
+                {servers.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.name} ({s.username}@{s.host}:{s.port})
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
         ) : (
           <>
             <div className="db-form-grid">
@@ -294,6 +324,9 @@ export function DbConnectionModal({
           </span>
         </label>
 
+        {prefill?.warning && (
+          <div className="db-banner">{prefill.warning}</div>
+        )}
         {testResult && (
           <div className={`db-banner ${testResult.ok ? "is-ok" : "is-err"}`}>
             <strong>{testResult.ok ? "Berhasil" : "Gagal"}</strong>: {testResult.message}

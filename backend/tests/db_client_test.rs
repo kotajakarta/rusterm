@@ -465,3 +465,306 @@ async fn mysql_tls_connection_does_not_panic_on_rustls_provider() {
     // Harus mengembalikan error HTTP (502 Bad Gateway), bukan panic / ERR_EMPTY_RESPONSE
     assert_eq!(st, StatusCode::BAD_GATEWAY, "unexpected body: {}", body);
 }
+
+#[tokio::test]
+async fn config_backup_roundtrip_includes_db_connections_and_relinks_ssh_server() {
+    use xterm_backend::models::db::DbStore;
+    use xterm_backend::models::db_client::{DbConnectionInput, DbEngine, SslMode};
+    use xterm_backend::models::server::{BackupPayload, ServerInput};
+    use xterm_backend::services::crypto::CryptoService;
+
+    let dir1 = tempfile::tempdir().unwrap();
+    let db1 = DbStore::new(&dir1.path().join("src.sqlite")).unwrap();
+    let kek1 = [0x11u8; 32];
+
+    let srv_id = db1
+        .create_server(
+            &ServerInput {
+                name: "Prod Bastion".into(),
+                host: "10.20.30.40".into(),
+                port: 22,
+                username: "ops".into(),
+                auth_type: "password".into(),
+                password: Some("ssh-secret".into()),
+                private_key: None,
+                passphrase: None,
+                group_name: "Prod".into(),
+                color: "#22c55e".into(),
+            },
+            &kek1,
+        )
+        .unwrap();
+
+    db1.create_db_connection(
+        &DbConnectionInput {
+            name: "Prod PG".into(),
+            engine: DbEngine::Postgres,
+            host: "127.0.0.1".into(),
+            port: 5432,
+            username: "app".into(),
+            password: Some("pg-super-secret".into()),
+            default_database: "appdb".into(),
+            file_path: "".into(),
+            ssl_mode: SslMode::Require,
+            ssh_server_id: Some(srv_id),
+            read_only: true,
+            color: "#3b82f6".into(),
+        },
+        &kek1,
+    )
+    .unwrap();
+
+    db1.create_db_connection(
+        &DbConnectionInput {
+            name: "Remote SQLite".into(),
+            engine: DbEngine::Sqlite,
+            host: "".into(),
+            port: 0,
+            username: "".into(),
+            password: None,
+            default_database: "".into(),
+            file_path: "/var/lib/app/data.sqlite".into(),
+            ssl_mode: SslMode::Prefer,
+            ssh_server_id: Some(srv_id),
+            read_only: false,
+            color: "".into(),
+        },
+        &kek1,
+    )
+    .unwrap();
+
+    let exported = db1.export_backup_data(&kek1).unwrap();
+    assert_eq!(exported.db_connections.len(), 2);
+    assert_eq!(
+        exported.db_connections[0].ssh_server_name.as_deref(),
+        Some("Prod Bastion")
+    );
+
+    // Enkripsi & dekripsi envelope dengan PIN
+    let envelope = CryptoService::encrypt_backup(&exported, "pin-1234").unwrap();
+    let decrypted_payload = CryptoService::decrypt_backup(&envelope, "pin-1234").unwrap();
+
+    // Import ke DB baru dengan KEK berbeda
+    let dir2 = tempfile::tempdir().unwrap();
+    let db2 = DbStore::new(&dir2.path().join("dst.sqlite")).unwrap();
+    let kek2 = [0x22u8; 32];
+
+    let stats1 = db2.import_backup_data(&decrypted_payload, &kek2).unwrap();
+    assert_eq!(stats1.servers_added, 1);
+    assert_eq!(stats1.db_connections_added, 2);
+    assert_eq!(stats1.db_connections_updated, 0);
+
+    let servers2 = db2.list_servers().unwrap();
+    let new_srv_id = servers2[0].id;
+    let conns2 = db2.list_db_connections().unwrap();
+    assert_eq!(conns2.len(), 2);
+
+    let pg_out = conns2.iter().find(|c| c.name == "Prod PG").unwrap();
+    assert_eq!(pg_out.ssh_server_id, Some(new_srv_id));
+    assert!(pg_out.read_only);
+    let pg_dec = db2.get_db_connection_decrypted(pg_out.id, &kek2).unwrap();
+    assert_eq!(pg_dec.password.as_deref(), Some("pg-super-secret"));
+
+    // Import kedua harus update, bukan duplikat
+    let stats2 = db2.import_backup_data(&decrypted_payload, &kek2).unwrap();
+    assert_eq!(stats2.db_connections_added, 0);
+    assert_eq!(stats2.db_connections_updated, 2);
+    assert_eq!(db2.list_db_connections().unwrap().len(), 2);
+
+    // Backward compatibility: payload lama tanpa field `db_connections`
+    let legacy_json = json!({
+        "version": 1,
+        "servers": [],
+        "snippets": []
+    });
+    let legacy_payload: BackupPayload = serde_json::from_value(legacy_json).unwrap();
+    assert!(legacy_payload.db_connections.is_empty());
+}
+
+#[test]
+fn parse_container_db_hint_handles_postgres_mysql_mariadb_and_non_db() {
+    use xterm_backend::models::containers::parse_container_db_hint;
+
+    let pg_inspect = json!([{
+        "Id": "abcdef1234567890",
+        "Name": "/my-postgres",
+        "Config": {
+            "Image": "postgres:16-alpine",
+            "Env": [
+                "POSTGRES_USER=admin",
+                "POSTGRES_PASSWORD=secretpw",
+                "POSTGRES_DB=billing"
+            ]
+        },
+        "NetworkSettings": {
+            "Ports": {
+                "5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "15432"}]
+            }
+        }
+    }]);
+    let pg = parse_container_db_hint(&pg_inspect).expect("postgres hint");
+    assert_eq!(pg.engine, "postgres");
+    assert_eq!(pg.container_name, "my-postgres");
+    assert_eq!(pg.host, "127.0.0.1");
+    assert_eq!(pg.port, 15432);
+    assert_eq!(pg.username, "admin");
+    assert_eq!(pg.password.as_deref(), Some("secretpw"));
+    assert_eq!(pg.default_database, "billing");
+    assert!(pg.warning.is_none());
+
+    let mariadb_inspect = json!([{
+        "Id": "1122334455667788",
+        "Name": "/maria-app",
+        "Config": {
+            "Image": "mariadb:11",
+            "Env": [
+                "MARIADB_ROOT_PASSWORD=rootpw",
+                "MARIADB_DATABASE=shop"
+            ]
+        },
+        "NetworkSettings": {
+            "Ports": { "3306/tcp": null },
+            "Networks": {
+                "bridge": { "IPAddress": "172.17.0.4" }
+            }
+        }
+    }]);
+    let maria = parse_container_db_hint(&mariadb_inspect).expect("mariadb hint");
+    assert_eq!(maria.engine, "mysql");
+    assert_eq!(maria.host, "172.17.0.4");
+    assert_eq!(maria.port, 3306);
+    assert_eq!(maria.username, "root");
+    assert_eq!(maria.password.as_deref(), Some("rootpw"));
+    assert_eq!(maria.default_database, "shop");
+    assert!(maria.warning.is_some());
+
+    let nginx_inspect = json!([{
+        "Id": "998877665544",
+        "Name": "/web",
+        "Config": { "Image": "nginx:alpine", "Env": [] },
+        "NetworkSettings": { "Ports": { "80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}] } }
+    }]);
+    assert!(parse_container_db_hint(&nginx_inspect).is_none());
+}
+
+#[test]
+fn remote_sqlite_agent_python_handles_lifecycle_and_read_only() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use xterm_backend::services::db_drivers::remote_sqlite::REMOTE_SQLITE_AGENT_PY;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("remote_test.sqlite");
+    let db_path_str = db_path.to_str().unwrap().to_string();
+
+    let call = |payload: Value| -> Value {
+        let mut child = Command::new("python3")
+            .args(["-u", "-c", REMOTE_SQLITE_AGENT_PY])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn python3");
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "python3 failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("valid json from agent")
+    };
+
+    // 1. Test connection & create table
+    let res = call(json!({
+        "file_path": db_path_str,
+        "read_only": false,
+        "op": "test_connection"
+    }));
+    assert_eq!(res["ok"], true);
+
+    let res = call(json!({
+        "file_path": db_path_str,
+        "read_only": false,
+        "op": "create_table",
+        "ddl": "CREATE TABLE \"items\" (\"id\" INTEGER PRIMARY KEY, \"name\" TEXT NOT NULL)"
+    }));
+    assert_eq!(res["ok"], true);
+
+    // 2. Insert, fetch with filter, update, delete
+    let res = call(json!({
+        "file_path": db_path_str,
+        "read_only": false,
+        "op": "insert_row",
+        "table": "items",
+        "values": { "id": 1, "name": "Alpha" }
+    }));
+    assert_eq!(res["ok"], true);
+    assert_eq!(res["data"]["affected_rows"], 1);
+
+    let res = call(json!({
+        "file_path": db_path_str,
+        "read_only": true,
+        "op": "fetch_rows",
+        "table": "items",
+        "page": 1,
+        "limit": 10,
+        "filter": { "column": "name", "op": "contains", "value": "Alp" }
+    }));
+    assert_eq!(res["ok"], true);
+    assert_eq!(res["data"]["rows"].as_array().unwrap().len(), 1);
+
+    // 3. Read-only mode harus menolak write query di level SQLite URI mode=ro
+    let ro_write = call(json!({
+        "file_path": db_path_str,
+        "read_only": true,
+        "op": "execute_query",
+        "sql": "INSERT INTO items (id, name) VALUES (2, 'Blocked')",
+        "max_rows": 100
+    }));
+    assert_eq!(ro_write["ok"], false);
+
+    // 4. Update, describe, delete, drop
+    let res = call(json!({
+        "file_path": db_path_str,
+        "read_only": false,
+        "op": "update_row",
+        "table": "items",
+        "pk": { "id": 1 },
+        "values": { "name": "Beta" }
+    }));
+    assert_eq!(res["ok"], true);
+    assert_eq!(res["data"]["affected_rows"], 1);
+
+    let desc = call(json!({
+        "file_path": db_path_str,
+        "read_only": true,
+        "op": "describe_table",
+        "table": "items"
+    }));
+    assert_eq!(desc["ok"], true);
+    assert_eq!(desc["data"]["primary_keys"], json!(["id"]));
+
+    let del = call(json!({
+        "file_path": db_path_str,
+        "read_only": false,
+        "op": "delete_row",
+        "table": "items",
+        "pk": { "id": 1 }
+    }));
+    assert_eq!(del["ok"], true);
+    assert_eq!(del["data"]["affected_rows"], 1);
+
+    let drop = call(json!({
+        "file_path": db_path_str,
+        "read_only": false,
+        "op": "drop_table",
+        "table": "items"
+    }));
+    assert_eq!(drop["ok"], true);
+}

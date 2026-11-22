@@ -25,6 +25,12 @@ export function formatSyncStats(stats: BackupStats): string {
   if (stats.snippets_added > 0) {
     parts.push(`+${stats.snippets_added} snippet ditambahkan`);
   }
+  if ((stats.db_connections_added ?? 0) > 0) {
+    parts.push(`+${stats.db_connections_added} koneksi DB ditambahkan`);
+  }
+  if ((stats.db_connections_updated ?? 0) > 0) {
+    parts.push(`${stats.db_connections_updated} koneksi DB diperbarui`);
+  }
 
   if (parts.length === 0) {
     return "Semua data sudah sinkron (tidak ada entri baru).";

@@ -1,7 +1,8 @@
 use crate::controllers::servers::AppState;
 use crate::models::containers::{
-    normalize_container_item, ContainerActionBody, ContainerEngineInfo, ContainerItem,
-    ContainerLogsOut, ContainerRunBody, ImageItem, ImagePullBody,
+    normalize_container_item, parse_container_db_hint, ContainerActionBody, ContainerDbHint,
+    ContainerEngineInfo, ContainerItem, ContainerLogsOut, ContainerRunBody, ImageItem,
+    ImagePullBody,
 };
 use crate::models::server::DecryptedServerCreds;
 use crate::services::vault::Vault;
@@ -20,6 +21,7 @@ pub fn router(state: AppState) -> Router {
         .route("/containers/list", get(list_containers))
         .route("/containers/action", post(container_action))
         .route("/containers/logs", get(container_logs))
+        .route("/containers/db-hint", get(container_db_hint))
         .route(
             "/containers/images",
             get(list_images).delete(delete_image),
@@ -667,4 +669,66 @@ async fn run_container(
         "id": short_cid,
         "message": format!("Kontainer {} berhasil dijalankan", short_cid),
     })))
+}
+
+#[derive(Deserialize)]
+struct ContainerDbHintQuery {
+    server_id: i64,
+    container_id: String,
+}
+
+async fn container_db_hint(
+    Query(query): Query<ContainerDbHintQuery>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ContainerDbHint>, (StatusCode, String)> {
+    check_auth(&headers, &state.vault)
+        .await
+        .map_err(|s| (s, "Unauthorized".into()))?;
+
+    let cid = query.container_id.trim();
+    if cid.is_empty()
+        || cid.len() > 128
+        || !cid
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    {
+        return Err((StatusCode::BAD_REQUEST, "container_id tidak valid".into()));
+    }
+
+    let kek = state
+        .vault
+        .get_kek()
+        .await
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    let creds = state
+        .db
+        .get_server_credentials(query.server_id, &kek)
+        .map_err(|_| (StatusCode::NOT_FOUND, "Server not found".into()))?;
+
+    let eng_info = detect_engine(&state, &creds).await;
+    if eng_info.engine == "none" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Engine container (podman/docker) tidak ditemukan di server ini".into(),
+        ));
+    }
+
+    let cmd = format!("{} inspect {}", eng_info.engine, shell_quote(cid));
+    let out = run_checked(&state, &creds, &cmd, 15).await?;
+    let json_val: serde_json::Value = serde_json::from_str(out.trim()).map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("Gagal membaca output inspect container: {}", e),
+        )
+    })?;
+
+    let hint = parse_container_db_hint(&json_val).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Container ini tidak terdeteksi sebagai database PostgreSQL atau MySQL/MariaDB".into(),
+        )
+    })?;
+
+    Ok(Json(hint))
 }

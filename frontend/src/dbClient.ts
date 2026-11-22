@@ -209,3 +209,28 @@ export function pushQueryHistory(connId: number, sql: string): string[] {
   }
   return next;
 }
+
+export function detectDbEngineFromContainer(container: {
+  image: string;
+  ports: ReadonlyArray<{ container_port: number }>;
+}): "postgres" | "mysql" | null {
+  const img = container.image.toLowerCase();
+  if (
+    img.includes("postgres") ||
+    img.includes("postgis") ||
+    img.includes("timescaledb") ||
+    img.includes("pgvector") ||
+    container.ports.some((p) => p.container_port === 5432)
+  ) {
+    return "postgres";
+  }
+  if (
+    img.includes("mysql") ||
+    img.includes("mariadb") ||
+    img.includes("percona") ||
+    container.ports.some((p) => p.container_port === 3306)
+  ) {
+    return "mysql";
+  }
+  return null;
+}

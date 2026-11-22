@@ -10,6 +10,7 @@ import type {
   CFRouteIn,
   ConnectionCheck,
   ContainerActionBody,
+  ContainerDbHint,
   ContainerEngineInfo,
   ContainerItem,
   ContainerLogsOut,
@@ -349,6 +350,11 @@ export const api = {
     request<{ ok: boolean; message: string }>("POST", "/api/containers/action", body),
   containersLogs: (serverId: number, containerId: string, tail = 150) =>
     request<ContainerLogsOut>("GET", `/api/containers/logs?server_id=${serverId}&container_id=${encodeURIComponent(containerId)}&tail=${tail}`),
+  containersDbHint: (serverId: number, containerId: string) =>
+    request<ContainerDbHint>(
+      "GET",
+      `/api/containers/db-hint?server_id=${serverId}&container_id=${encodeURIComponent(containerId)}`,
+    ),
   containersImages: (serverId: number) =>
     request<ImageItem[]>("GET", `/api/containers/images?server_id=${serverId}`),
   containersPullImage: (serverId: number, image: string) =>

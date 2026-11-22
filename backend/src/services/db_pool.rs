@@ -2,6 +2,7 @@ use crate::models::db::DbStore;
 use crate::models::db_client::{DbEngine, DecryptedDbConnection};
 use crate::services::db_drivers::mysql::MysqlDriver;
 use crate::services::db_drivers::postgres::PostgresDriver;
+use crate::services::db_drivers::remote_sqlite::RemoteSqliteDriver;
 use crate::services::db_drivers::sqlite::SqliteDriver;
 use crate::services::db_drivers::{DbDriver, DbDriverError, DEFAULT_QUERY_TIMEOUT_SECS};
 use crate::services::db_tunnel::{open_ssh_tunnel, ActiveTunnel};
@@ -127,10 +128,29 @@ impl DbClientPool {
         kek: &[u8; 32],
     ) -> Result<Box<dyn DbDriver>, DbDriverError> {
         match conn.engine {
-            DbEngine::Sqlite => Ok(Box::new(SqliteDriver::new(
-                conn.file_path.clone(),
-                conn.read_only,
-            )?)),
+            DbEngine::Sqlite => {
+                if let Some(ssh_server_id) = conn.ssh_server_id {
+                    let server_creds = db_store
+                        .get_server_credentials(ssh_server_id, kek)
+                        .map_err(|e| {
+                            DbDriverError::Tunnel(format!(
+                                "Server SSH (id={}) tidak ditemukan: {}",
+                                ssh_server_id, e
+                            ))
+                        })?;
+                    Ok(Box::new(RemoteSqliteDriver::new(
+                        ssh_pool.clone(),
+                        server_creds,
+                        conn.file_path.clone(),
+                        conn.read_only,
+                    )?))
+                } else {
+                    Ok(Box::new(SqliteDriver::new(
+                        conn.file_path.clone(),
+                        conn.read_only,
+                    )?))
+                }
+            }
             DbEngine::Postgres => {
                 let (host, port) = self.resolve_endpoint(conn, db_store, ssh_pool, kek).await?;
                 Ok(Box::new(PostgresDriver::new(

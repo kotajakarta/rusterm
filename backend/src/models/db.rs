@@ -6,7 +6,7 @@ use crate::models::db_client::{
 use crate::models::tailscale::TailscaleAccount;
 use crate::models::files::{FileRemote, FileRemoteInput};
 use crate::models::server::{
-    BackupBookmark, BackupPayload, BackupServer, BackupSnippet, BackupStats,
+    BackupBookmark, BackupDbConnection, BackupPayload, BackupServer, BackupSnippet, BackupStats,
     DecryptedServerCreds, ServerInput, ServerOutput,
 };
 use crate::models::snippet::{Snippet, SnippetInput};
@@ -624,10 +624,44 @@ impl DbStore {
             })
             .collect();
 
+        let server_ref_by_id: std::collections::HashMap<i64, (String, String)> = self
+            .list_servers()?
+            .into_iter()
+            .map(|s| (s.id, (s.name, s.host)))
+            .collect();
+
+        let mut backup_db_conns = Vec::new();
+        for c in self.list_db_connections()? {
+            let dec = self.get_db_connection_decrypted(c.id, kek)?;
+            let (ssh_server_name, ssh_server_host) = match dec.ssh_server_id {
+                Some(sid) => match server_ref_by_id.get(&sid) {
+                    Some((sname, shost)) => (Some(sname.clone()), Some(shost.clone())),
+                    None => (None, None),
+                },
+                None => (None, None),
+            };
+            backup_db_conns.push(BackupDbConnection {
+                name: dec.name,
+                engine: dec.engine.as_str().to_string(),
+                host: dec.host,
+                port: dec.port,
+                username: dec.username,
+                password: dec.password,
+                default_database: dec.default_database,
+                file_path: dec.file_path,
+                ssl_mode: dec.ssl_mode.as_str().to_string(),
+                ssh_server_name,
+                ssh_server_host,
+                read_only: dec.read_only,
+                color: c.color,
+            });
+        }
+
         Ok(BackupPayload {
             version: 1,
             servers: backup_servers,
             snippets,
+            db_connections: backup_db_conns,
         })
     }
 
@@ -688,6 +722,51 @@ impl DbStore {
                     command: sn.command.clone(),
                 })?;
                 stats.snippets_added += 1;
+            }
+        }
+
+        if !payload.db_connections.is_empty() {
+            let server_id_by_ref: std::collections::HashMap<(String, String), i64> = self
+                .list_servers()?
+                .into_iter()
+                .map(|s| ((s.name, s.host), s.id))
+                .collect();
+            let existing_db_conns = self.list_db_connections()?;
+
+            for dbc in &payload.db_connections {
+                let Some(engine) = DbEngine::from_str_checked(&dbc.engine) else {
+                    continue;
+                };
+                let ssh_server_id = match (&dbc.ssh_server_name, &dbc.ssh_server_host) {
+                    (Some(sname), Some(shost)) => {
+                        server_id_by_ref.get(&(sname.clone(), shost.clone())).copied()
+                    }
+                    _ => None,
+                };
+                let input = DbConnectionInput {
+                    name: dbc.name.clone(),
+                    engine,
+                    host: dbc.host.clone(),
+                    port: dbc.port,
+                    username: dbc.username.clone(),
+                    password: dbc.password.clone(),
+                    default_database: dbc.default_database.clone(),
+                    file_path: dbc.file_path.clone(),
+                    ssl_mode: SslMode::from_str_lossy(&dbc.ssl_mode),
+                    ssh_server_id,
+                    read_only: dbc.read_only,
+                    color: dbc.color.clone(),
+                };
+                if let Some(ex) = existing_db_conns
+                    .iter()
+                    .find(|c| c.name == dbc.name && c.engine == engine)
+                {
+                    self.update_db_connection(ex.id, &input, kek)?;
+                    stats.db_connections_updated += 1;
+                } else {
+                    self.create_db_connection(&input, kek)?;
+                    stats.db_connections_added += 1;
+                }
             }
         }
 

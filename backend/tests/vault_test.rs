@@ -142,6 +142,7 @@ async fn test_backup_crypto_roundtrip() {
             name: "Check disk".to_string(),
             command: "df -h".to_string(),
         }],
+        db_connections: vec![],
     };
 
     let envelope = CryptoService::encrypt_backup(&payload, "my-backup-pin").unwrap();

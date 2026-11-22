@@ -1,5 +1,6 @@
 pub mod mysql;
 pub mod postgres;
+pub mod remote_sqlite;
 pub mod sqlite;
 
 use crate::models::db_client::{

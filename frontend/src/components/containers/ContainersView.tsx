@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type {
+  ContainerDbHint,
   ContainerEngineInfo,
   ContainerItem,
   ImageItem,
@@ -17,6 +18,7 @@ interface ContainersViewProps {
   activeServerId: number | null;
   onSelectServer: (id: number) => void;
   onOpenTerminal: (serverId: number, startupCmd: string, title: string) => void;
+  onQuickConnectDb?: (serverId: number, hint: ContainerDbHint) => void;
 }
 
 export function ContainersView({
@@ -24,6 +26,7 @@ export function ContainersView({
   activeServerId,
   onSelectServer,
   onOpenTerminal,
+  onQuickConnectDb,
 }: ContainersViewProps) {
   const currentServerId = activeServerId ?? servers[0]?.id ?? 0;
   const [selectedServerId, setSelectedServerId] = useState<number>(currentServerId);
@@ -86,6 +89,12 @@ export function ContainersView({
     const engine = engineInfo?.engine || "podman";
     const cmd = `${engine} exec -it ${containerId} /bin/sh || ${engine} exec -it ${containerId} bash`;
     onOpenTerminal(selectedServerId, cmd, `Exec: ${containerName}`);
+  };
+
+  const handleQuickConnectDb = async (containerId: string) => {
+    if (!onQuickConnectDb) return;
+    const hint = await api.containersDbHint(selectedServerId, containerId);
+    onQuickConnectDb(selectedServerId, hint);
   };
 
   const selectedServer = servers.find((s) => s.id === selectedServerId);
@@ -206,6 +215,9 @@ export function ContainersView({
                 onRefresh={() => void loadData(selectedServerId)}
                 onOpenLogs={(cid, cname) => setLogsModal({ id: cid, name: cname })}
                 onExecTerminal={handleExecTerminal}
+                onQuickConnectDb={
+                  onQuickConnectDb ? (cid) => handleQuickConnectDb(cid) : undefined
+                }
                 onRunNew={() => setRunModal({ open: true })}
               />
             ) : (

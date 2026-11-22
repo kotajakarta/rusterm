@@ -51,6 +51,34 @@ export interface BackupStats {
   servers_updated: number;
   bookmarks_added: number;
   snippets_added: number;
+  db_connections_added?: number;
+  db_connections_updated?: number;
+}
+
+export interface ContainerDbHint {
+  container_id: string;
+  container_name: string;
+  engine: "postgres" | "mysql";
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  default_database: string;
+  ssl_mode: DbSslMode;
+  warning?: string;
+}
+
+export interface DbConnectionPrefill {
+  name: string;
+  engine: DbEngine;
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  default_database: string;
+  ssl_mode: DbSslMode;
+  ssh_server_id: number | null;
+  warning?: string;
 }
 
 export interface DirEntry {
