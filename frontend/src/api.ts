@@ -56,6 +56,18 @@ import type {
   TailscaleVerifyOut,
   TailscaleDevice,
   TailscaleDeviceRoutes,
+  DbConnection,
+  DbConnectionInput,
+  TestDbConnectionInput,
+  DbConnectionTestResult,
+  DbTableInfo,
+  DbTableSchema,
+  DbRowsPage,
+  DbQueryResult,
+  DbRowMutationInput,
+  DbRowMutationResult,
+  DbCreateTableInput,
+  DbFilterOp,
 } from "./types";
 
 /** Session token: embedded in the page by the backend; `?token=` is the Vite dev-server fallback. */
@@ -417,6 +429,77 @@ export const api = {
   checkUpdate: () => request<UpdateCheckResult>("GET", "/api/system/update-check"),
   applyUpdate: () => request<UpdateApplyResult>("POST", "/api/system/update-apply"),
   getUpdateProgress: () => request<UpdateProgressResult>("GET", "/api/system/update-progress"),
+
+  dbListConnections: () => request<DbConnection[]>("GET", "/api/db/connections"),
+  dbCreateConnection: (input: DbConnectionInput) =>
+    request<DbConnection>("POST", "/api/db/connections", input),
+  dbUpdateConnection: (id: number, input: DbConnectionInput) =>
+    request<DbConnection>("PUT", `/api/db/connections/${id}`, input),
+  dbDeleteConnection: (id: number) =>
+    request<void>("DELETE", `/api/db/connections/${id}`),
+  dbTestConnection: (input: TestDbConnectionInput) =>
+    request<DbConnectionTestResult>("POST", "/api/db/connections/test", input),
+  dbListDatabases: (connId: number) =>
+    request<string[]>("GET", `/api/db/${connId}/databases`),
+  dbCreateDatabase: (connId: number, name: string) =>
+    request<void>("POST", `/api/db/${connId}/databases`, { name }),
+  dbDropDatabase: (connId: number, dbName: string) =>
+    request<void>("DELETE", `/api/db/${connId}/databases/${encodeURIComponent(dbName)}`),
+  dbListTables: (connId: number, db: string) =>
+    request<DbTableInfo[]>("GET", `/api/db/${connId}/tables?db=${encodeURIComponent(db)}`),
+  dbCreateTable: (connId: number, input: DbCreateTableInput) =>
+    request<void>("POST", `/api/db/${connId}/tables`, input),
+  dbDropTable: (connId: number, db: string, table: string) =>
+    request<void>(
+      "DELETE",
+      `/api/db/${connId}/tables/${encodeURIComponent(table)}?db=${encodeURIComponent(db)}`,
+    ),
+  dbDescribeTable: (connId: number, db: string, table: string) =>
+    request<DbTableSchema>(
+      "GET",
+      `/api/db/${connId}/tables/${encodeURIComponent(table)}/schema?db=${encodeURIComponent(db)}`,
+    ),
+  dbFetchRows: (
+    connId: number,
+    table: string,
+    opts: {
+      db: string;
+      page?: number;
+      limit?: number;
+      sort?: string;
+      dir?: "asc" | "desc";
+      filter_col?: string;
+      filter_op?: DbFilterOp;
+      filter_val?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ db: opts.db });
+    if (opts.page) q.set("page", String(opts.page));
+    if (opts.limit) q.set("limit", String(opts.limit));
+    if (opts.sort) q.set("sort", opts.sort);
+    if (opts.dir) q.set("dir", opts.dir);
+    if (opts.filter_col && opts.filter_op) {
+      q.set("filter_col", opts.filter_col);
+      q.set("filter_op", opts.filter_op);
+      if (opts.filter_val !== undefined) q.set("filter_val", opts.filter_val);
+    }
+    return request<DbRowsPage>(
+      "GET",
+      `/api/db/${connId}/tables/${encodeURIComponent(table)}/rows?${q.toString()}`,
+    );
+  },
+  dbMutateRow: (connId: number, table: string, body: DbRowMutationInput) =>
+    request<DbRowMutationResult>(
+      "POST",
+      `/api/db/${connId}/tables/${encodeURIComponent(table)}/rows`,
+      body,
+    ),
+  dbExecuteQuery: (connId: number, db: string, sql: string, maxRows = 500) =>
+    request<DbQueryResult>("POST", `/api/db/${connId}/query`, {
+      db,
+      sql,
+      max_rows: maxRows,
+    }),
 };
 
 export function terminalSocketUrl(

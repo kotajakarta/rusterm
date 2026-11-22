@@ -5,16 +5,18 @@ use tokio::net::TcpListener;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use xterm_backend::cli;
+use xterm_backend::controllers::db_client::DbClientAppState;
 use xterm_backend::controllers::servers::AppState;
 use xterm_backend::controllers::static_files::StaticConfig;
 use xterm_backend::controllers::terminal_ws::WsAppState;
 use xterm_backend::controllers::{
-    api_errors, auth, bookmarks, cloudflare, config, containers, files, request_guard, servers, snippets, static_files,
-    system, tailscale, terminal_ws,
+    api_errors, auth, bookmarks, cloudflare, config, containers, db_client, files, request_guard,
+    servers, snippets, static_files, system, tailscale, terminal_ws,
 };
 use xterm_backend::models::db::DbStore;
 use xterm_backend::services::app_launcher;
 use xterm_backend::services::cloudflare::CloudflareClient;
+use xterm_backend::services::db_pool::DbClientPool;
 use xterm_backend::services::tailscale::TailscaleClient;
 use xterm_backend::services::ssh_pool::SshPool;
 use xterm_backend::services::vault::Vault;
@@ -108,6 +110,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool: ssh_pool.clone(),
     };
 
+    let db_client_pool = DbClientPool::new();
+    let db_client_state = DbClientAppState {
+        app: app_state.clone(),
+        db_pool: db_client_pool.clone(),
+    };
+
     // Generate random 32-character hex token for session protection in index.html
     let rusterm_token = cli.token.clone().unwrap_or_else(|| {
         let mut token_bytes = [0u8; 16];
@@ -136,6 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", cloudflare::router(app_state.clone()))
         .nest("/api", tailscale::router(app_state.clone()))
         .nest("/api", system::router(app_state.clone()))
+        .nest("/api", db_client::router(db_client_state))
         .layer(axum::middleware::map_response(api_errors::wrap_plain_errors));
 
     let ws_router = terminal_ws::router(ws_state);
@@ -178,10 +187,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let pool_clone = ssh_pool.clone();
+    let db_pool_clone = db_client_pool.clone();
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutting down server, locking vault and disconnecting SSH pool...");
         vault.lock().await;
+        db_pool_clone.close_all().await;
         pool_clone.disconnect_all().await;
     });
 

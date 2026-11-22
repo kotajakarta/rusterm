@@ -46,6 +46,7 @@ const PATHS = {
   check: "M20 6L9 17l-5-5",
   cloud: "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z",
   chevronLeft: "M15 18l-6-6 6-6",
+  database: "M4 6c0 1.66 3.58 3 8 3s8-1.34 8-3-3.58-3-8-3-8 1.34-8 3zm0 6c0 1.66 3.58 3 8 3s8-1.34 8-3M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6",
 } as const;
 
 export type IconName = keyof typeof PATHS;

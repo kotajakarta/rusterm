@@ -48,6 +48,7 @@ import { ChangePin } from "./components/ChangePin";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConfigBackupDialog } from "./components/ConfigBackupDialog";
 import { ContainersView } from "./components/containers/ContainersView";
+import { DbWorkspace } from "./components/db/DbWorkspace";
 import { FilesView } from "./components/files/FilesView";
 import { Icon } from "./components/Icon";
 import { MobileKeyBar } from "./components/MobileKeyBar";
@@ -138,7 +139,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
     return normalizeIdleLockMinutes(readString(IDLE_LOCK_KEY));
   });
   const lastActiveRef = useRef<number>(Date.now());
-  const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers">("terminal");
+  const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers" | "database">("terminal");
   const [filesTargetReq, setFilesTargetReq] = useState<{
     serverId: number;
     path?: string;
@@ -649,6 +650,14 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
     [activeTab, selectedServerId, servers],
   );
 
+  const openDatabase = useCallback((targetServerId?: number) => {
+    setSidebarOpen(false);
+    if (targetServerId !== undefined) {
+      setSelectedServerId(targetServerId);
+    }
+    setWorkspaceMode("database");
+  }, []);
+
   const openContainerExecTerminal = useCallback(
     async (serverId: number, startupCmd: string, title: string) => {
       setWorkspaceMode("terminal");
@@ -967,6 +976,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             onEditBookmark={(bookmark) => setDialog({ kind: "bookmark", bookmark, serverId: bookmark.server_id })}
             onDeleteBookmark={confirmDeleteBookmark}
             onOpenContainers={(sid) => openContainers(sid)}
+            onOpenDatabase={(sid) => openDatabase(sid)}
             onReorder={reorderServers}
           />
         </div>
@@ -1036,6 +1046,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           onChangeWorkspaceMode={setWorkspaceMode}
           onOpenFiles={() => openFileManager()}
           onOpenContainers={() => openContainers()}
+          onOpenDatabase={() => openDatabase()}
           servers={serverMap}
           onSelect={selectTab}
           onClose={closeTab}
@@ -1066,6 +1077,13 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             onOpenTerminal={(srvId, startupCmd, title) => {
               void openContainerExecTerminal(srvId, startupCmd, title);
             }}
+          />
+        )}
+
+        {workspaceMode === "database" && (
+          <DbWorkspace
+            servers={servers}
+            preferredSshServerId={selectedServerId ?? activeTab?.serverId ?? null}
           />
         )}
 
@@ -1474,6 +1492,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           servers={servers}
           bookmarks={bookmarks}
           onPick={(serverId, bookmarkId) => openTab(serverId, bookmarkId, false)}
+          onOpenDatabase={() => openDatabase()}
           onClose={() => setDialog(null)}
         />
       )}

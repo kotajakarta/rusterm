@@ -42,6 +42,7 @@ interface SidebarProps {
   onEditBookmark: (bookmark: Bookmark) => void;
   onDeleteBookmark: (bookmark: Bookmark) => void;
   onOpenContainers?: (serverId: number) => void;
+  onOpenDatabase?: (serverId: number) => void;
   /** New display order of all servers (full id list). */
   onReorder: (ids: number[]) => void;
 }
@@ -265,6 +266,20 @@ export function Sidebar(props: SidebarProps) {
                           aria-label={`Buka containers di ${server.name}`}
                         >
                           <Icon name="box" size={14} />
+                        </button>
+                      )}
+                      {props.onOpenDatabase && (
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            props.onOpenDatabase?.(server.id);
+                          }}
+                          title="Buka Database Client (SSH Tunnel)"
+                          aria-label={`Buka database via ${server.name}`}
+                        >
+                          <Icon name="database" size={14} />
                         </button>
                       )}
                       <button

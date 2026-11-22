@@ -8,6 +8,7 @@ interface PaletteItem {
   key: string;
   serverId: number;
   bookmarkId: number | null;
+  action?: "database";
   title: string;
   detail: string;
   color: string;
@@ -18,6 +19,7 @@ interface CommandPaletteProps {
   servers: Server[];
   bookmarks: Bookmark[];
   onPick: (serverId: number, bookmarkId: number | null) => void;
+  onOpenDatabase?: () => void;
   onClose: () => void;
   title?: string;
   placeholder?: string;
@@ -29,6 +31,7 @@ export function CommandPalette({
   servers,
   bookmarks,
   onPick,
+  onOpenDatabase,
   onClose,
   title = "Lompat ke proyek",
   placeholder = "Ketik nama server, proyek, atau path",
@@ -42,6 +45,18 @@ export function CommandPalette({
   const items = useMemo<PaletteItem[]>(() => {
     const byId = new Map(servers.map((s) => [s.id, s]));
     const result: PaletteItem[] = [];
+    if (onlyServerId === undefined && onOpenDatabase) {
+      result.push({
+        key: "action-db",
+        serverId: -1,
+        bookmarkId: null,
+        action: "database",
+        title: "Buka Database Client",
+        detail: "PostgreSQL, MySQL/MariaDB, SQLite",
+        color: "#3b82f6",
+        haystack: "buka database db sql postgres mysql mariadb sqlite dbeaver",
+      });
+    }
     for (const bm of bookmarks) {
       const server = byId.get(bm.server_id);
       if (!server || (onlyServerId !== undefined && server.id !== onlyServerId)) continue;
@@ -67,7 +82,7 @@ export function CommandPalette({
       });
     }
     return result;
-  }, [servers, bookmarks, onlyServerId]);
+  }, [servers, bookmarks, onlyServerId, onOpenDatabase]);
 
   const filtered = useMemo(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -88,6 +103,11 @@ export function CommandPalette({
 
   const pick = (item: PaletteItem | undefined) => {
     if (!item) return;
+    if (item.action === "database") {
+      onOpenDatabase?.();
+      onClose();
+      return;
+    }
     onPick(item.serverId, item.bookmarkId);
   };
 
@@ -138,7 +158,7 @@ export function CommandPalette({
               onMouseEnter={() => setCursor(idx)}
               onClick={() => pick(item)}
             >
-              <Icon name={item.bookmarkId === null ? "server" : "folder"} size={15} />
+              <Icon name={item.action === "database" ? "database" : item.bookmarkId === null ? "server" : "folder"} size={15} />
               <span className="palette-title">{item.title}</span>
               <span className="palette-detail">{item.detail}</span>
             </li>

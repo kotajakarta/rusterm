@@ -39,6 +39,13 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 
+# External DB Client Drivers (pure-Rust, no C/OpenSSL dependencies)
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "0.26"
+mysql_async = { version = "0.34", default-features = false, features = ["rustls-tls", "minimal-rust"] }
+
 # SSH Client
 russh = "0.45"
 russh-keys = "0.45"

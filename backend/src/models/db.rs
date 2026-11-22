@@ -1,5 +1,8 @@
 use crate::models::bookmark::{Bookmark, BookmarkInput};
 use crate::models::cloudflare::CFAccount;
+use crate::models::db_client::{
+    DbConnectionInput, DbConnectionOutput, DbEngine, DecryptedDbConnection, SslMode,
+};
 use crate::models::tailscale::TailscaleAccount;
 use crate::models::files::{FileRemote, FileRemoteInput};
 use crate::models::server::{
@@ -105,6 +108,24 @@ impl DbStore {
                 name TEXT NOT NULL,
                 api_key TEXT NOT NULL,
                 tailnet TEXT NOT NULL DEFAULT '-',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS db_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                engine TEXT NOT NULL,
+                host TEXT NOT NULL DEFAULT '127.0.0.1',
+                port INTEGER NOT NULL DEFAULT 5432,
+                username TEXT NOT NULL DEFAULT '',
+                password TEXT,
+                default_database TEXT NOT NULL DEFAULT '',
+                file_path TEXT NOT NULL DEFAULT '',
+                ssl_mode TEXT NOT NULL DEFAULT 'prefer',
+                ssh_server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+                read_only INTEGER NOT NULL DEFAULT 0,
+                color TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
@@ -530,6 +551,31 @@ impl DbStore {
             tx.execute(
                 "UPDATE servers SET password = ?1, private_key = ?2, passphrase = ?3 WHERE id = ?4",
                 params![new_pw, new_pk, new_pass, id],
+            )?;
+        }
+
+        let mut db_stmt = tx.prepare("SELECT id, password FROM db_connections")?;
+        let db_rows: Vec<(i64, Option<String>)> = db_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(db_stmt);
+
+        for (id, pw) in db_rows {
+            let new_pw = match pw {
+                Some(ref enc) if !enc.is_empty() => {
+                    let decrypted = CryptoService::decrypt(enc, old_kek)
+                        .map_err(|e| DbError::Crypto(e.to_string()))?;
+                    Some(
+                        CryptoService::encrypt(&decrypted, new_kek)
+                            .map_err(|e| DbError::Crypto(e.to_string()))?,
+                    )
+                }
+                _ => pw,
+            };
+            tx.execute(
+                "UPDATE db_connections SET password = ?1 WHERE id = ?2",
+                params![new_pw, id],
             )?;
         }
 
@@ -1068,6 +1114,264 @@ impl DbStore {
     pub fn delete_tailscale_account(&self, id: i64) -> Result<(), DbError> {
         let conn = self.pool.get()?;
         let count = conn.execute("DELETE FROM tailscale_accounts WHERE id = ?1", params![id])?;
+        if count == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn list_db_connections(&self) -> Result<Vec<DbConnectionOutput>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, engine, host, port, username,
+                    password IS NOT NULL AND password != '',
+                    default_database, file_path, ssl_mode, ssh_server_id,
+                    read_only, color, created_at
+             FROM db_connections
+             ORDER BY sort_order ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let engine_str: String = row.get(2)?;
+            let ssl_str: String = row.get(9)?;
+            let read_only_int: i64 = row.get(11)?;
+            let port_i64: i64 = row.get(4)?;
+            Ok(DbConnectionOutput {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                engine: DbEngine::from_str_checked(&engine_str).unwrap_or(DbEngine::Postgres),
+                host: row.get(3)?,
+                port: u16::try_from(port_i64).unwrap_or(0),
+                username: row.get(5)?,
+                has_password: row.get(6)?,
+                default_database: row.get(7)?,
+                file_path: row.get(8)?,
+                ssl_mode: SslMode::from_str_lossy(&ssl_str),
+                ssh_server_id: row.get(10)?,
+                read_only: read_only_int != 0,
+                color: row.get(12)?,
+                created_at: row.get(13)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_db_connection(&self, id: i64) -> Result<DbConnectionOutput, DbError> {
+        let conn = self.pool.get()?;
+        conn.query_row(
+            "SELECT id, name, engine, host, port, username,
+                    password IS NOT NULL AND password != '',
+                    default_database, file_path, ssl_mode, ssh_server_id,
+                    read_only, color, created_at
+             FROM db_connections
+             WHERE id = ?1",
+            params![id],
+            |row| {
+                let engine_str: String = row.get(2)?;
+                let ssl_str: String = row.get(9)?;
+                let read_only_int: i64 = row.get(11)?;
+                let port_i64: i64 = row.get(4)?;
+                Ok(DbConnectionOutput {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    engine: DbEngine::from_str_checked(&engine_str).unwrap_or(DbEngine::Postgres),
+                    host: row.get(3)?,
+                    port: u16::try_from(port_i64).unwrap_or(0),
+                    username: row.get(5)?,
+                    has_password: row.get(6)?,
+                    default_database: row.get(7)?,
+                    file_path: row.get(8)?,
+                    ssl_mode: SslMode::from_str_lossy(&ssl_str),
+                    ssh_server_id: row.get(10)?,
+                    read_only: read_only_int != 0,
+                    color: row.get(12)?,
+                    created_at: row.get(13)?,
+                })
+            },
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => DbError::NotFound,
+            other => DbError::Sqlite(other),
+        })
+    }
+
+    pub fn get_db_connection_decrypted(
+        &self,
+        id: i64,
+        kek: &[u8; 32],
+    ) -> Result<DecryptedDbConnection, DbError> {
+        let conn = self.pool.get()?;
+        #[allow(clippy::type_complexity)]
+        let row: (
+            i64,
+            String,
+            String,
+            String,
+            i64,
+            String,
+            Option<String>,
+            String,
+            String,
+            String,
+            Option<i64>,
+            i64,
+        ) = conn
+            .query_row(
+                "SELECT id, name, engine, host, port, username, password,
+                        default_database, file_path, ssl_mode, ssh_server_id, read_only
+                 FROM db_connections
+                 WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
+                        r.get(10)?,
+                        r.get(11)?,
+                    ))
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => DbError::NotFound,
+                other => DbError::Sqlite(other),
+            })?;
+
+        let password = match row.6 {
+            Some(ref enc) if !enc.is_empty() => {
+                let plain = CryptoService::decrypt(enc, kek)
+                    .map_err(|e| DbError::Crypto(e.to_string()))?;
+                Some(String::from_utf8_lossy(&plain).into_owned())
+            }
+            _ => None,
+        };
+
+        Ok(DecryptedDbConnection {
+            id: row.0,
+            name: row.1,
+            engine: DbEngine::from_str_checked(&row.2).unwrap_or(DbEngine::Postgres),
+            host: row.3,
+            port: u16::try_from(row.4).unwrap_or(0),
+            username: row.5,
+            password,
+            default_database: row.7,
+            file_path: row.8,
+            ssl_mode: SslMode::from_str_lossy(&row.9),
+            ssh_server_id: row.10,
+            read_only: row.11 != 0,
+        })
+    }
+
+    pub fn create_db_connection(
+        &self,
+        input: &DbConnectionInput,
+        kek: &[u8; 32],
+    ) -> Result<i64, DbError> {
+        let conn = self.pool.get()?;
+        let enc_password = match &input.password {
+            Some(p) if !p.is_empty() => Some(
+                CryptoService::encrypt(p.as_bytes(), kek)
+                    .map_err(|e| DbError::Crypto(e.to_string()))?,
+            ),
+            _ => None,
+        };
+        let port = if input.port == 0 {
+            input.engine.default_port()
+        } else {
+            input.port
+        };
+        conn.execute(
+            r#"INSERT INTO db_connections
+               (name, engine, host, port, username, password, default_database, file_path, ssl_mode, ssh_server_id, read_only, color)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
+            params![
+                input.name.trim(),
+                input.engine.as_str(),
+                input.host.trim(),
+                port as i64,
+                input.username.trim(),
+                enc_password,
+                input.default_database.trim(),
+                input.file_path.trim(),
+                input.ssl_mode.as_str(),
+                input.ssh_server_id,
+                if input.read_only { 1i64 } else { 0i64 },
+                input.color.trim(),
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn update_db_connection(
+        &self,
+        id: i64,
+        input: &DbConnectionInput,
+        kek: &[u8; 32],
+    ) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let existing_pw: Option<String> = conn
+            .query_row(
+                "SELECT password FROM db_connections WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => DbError::NotFound,
+                other => DbError::Sqlite(other),
+            })?;
+
+        let enc_password = match &input.password {
+            Some(p) if !p.is_empty() => Some(
+                CryptoService::encrypt(p.as_bytes(), kek)
+                    .map_err(|e| DbError::Crypto(e.to_string()))?,
+            ),
+            Some(_) => None,
+            None => existing_pw,
+        };
+        let port = if input.port == 0 {
+            input.engine.default_port()
+        } else {
+            input.port
+        };
+
+        conn.execute(
+            r#"UPDATE db_connections
+               SET name = ?1, engine = ?2, host = ?3, port = ?4, username = ?5,
+                   password = ?6, default_database = ?7, file_path = ?8, ssl_mode = ?9,
+                   ssh_server_id = ?10, read_only = ?11, color = ?12
+               WHERE id = ?13"#,
+            params![
+                input.name.trim(),
+                input.engine.as_str(),
+                input.host.trim(),
+                port as i64,
+                input.username.trim(),
+                enc_password,
+                input.default_database.trim(),
+                input.file_path.trim(),
+                input.ssl_mode.as_str(),
+                input.ssh_server_id,
+                if input.read_only { 1i64 } else { 0i64 },
+                input.color.trim(),
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_db_connection(&self, id: i64) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let count = conn.execute("DELETE FROM db_connections WHERE id = ?1", params![id])?;
         if count == 0 {
             return Err(DbError::NotFound);
         }

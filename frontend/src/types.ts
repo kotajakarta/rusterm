@@ -584,6 +584,147 @@ export interface CFSyncPullOut {
   remote_metadata?: CFSyncMetadata | null;
 }
 
+export type DbEngine = "postgres" | "mysql" | "sqlite";
+export type DbSslMode = "disable" | "prefer" | "require";
+
+export interface DbConnection {
+  id: number;
+  name: string;
+  engine: DbEngine;
+  host: string;
+  port: number;
+  username: string;
+  has_password: boolean;
+  default_database: string;
+  file_path: string;
+  ssl_mode: DbSslMode;
+  ssh_server_id: number | null;
+  read_only: boolean;
+  color: string;
+  created_at: string;
+}
+
+export interface DbConnectionInput {
+  name: string;
+  engine: DbEngine;
+  host: string;
+  port: number;
+  username: string;
+  /** null keeps stored password on update; "" clears it */
+  password: string | null;
+  default_database: string;
+  file_path: string;
+  ssl_mode: DbSslMode;
+  ssh_server_id: number | null;
+  read_only: boolean;
+  color: string;
+}
+
+export interface TestDbConnectionInput {
+  id?: number | null;
+  engine: DbEngine;
+  host: string;
+  port: number;
+  username: string;
+  password: string | null;
+  default_database: string;
+  file_path: string;
+  ssl_mode: DbSslMode;
+  ssh_server_id: number | null;
+  read_only: boolean;
+}
+
+export interface DbConnectionTestResult {
+  ok: boolean;
+  message: string;
+  version: string | null;
+  elapsed_ms: number;
+}
+
+export type DbValue =
+  | { type: "null" }
+  | { type: "bool"; value: boolean }
+  | { type: "int"; value: number }
+  | { type: "float"; value: number }
+  | { type: "text"; value: { value: string; truncated: boolean } }
+  | { type: "json"; value: unknown }
+  | { type: "bytes"; value: { size: number; preview_hex: string } };
+
+export interface DbTableInfo {
+  name: string;
+  kind: "table" | "view" | string;
+  row_estimate: number | null;
+}
+
+export interface DbColumnSchema {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  default_value: string | null;
+  is_primary_key: boolean;
+}
+
+export interface DbIndexInfo {
+  name: string;
+  columns: string[];
+  unique: boolean;
+}
+
+export interface DbTableSchema {
+  database: string;
+  table: string;
+  columns: DbColumnSchema[];
+  primary_keys: string[];
+  indexes: DbIndexInfo[];
+}
+
+export interface DbRowsPage {
+  columns: string[];
+  rows: DbValue[][];
+  page: number;
+  limit: number;
+  total_estimate: number | null;
+  has_more: boolean;
+  elapsed_ms: number;
+}
+
+export interface DbQueryResult {
+  columns: string[];
+  rows: DbValue[][];
+  affected_rows: number | null;
+  elapsed_ms: number;
+  truncated: boolean;
+  message: string | null;
+}
+
+export type DbFilterOp = "eq" | "neq" | "contains" | "gt" | "gte" | "lt" | "lte" | "is_null" | "is_not_null";
+
+export interface DbRowMutationInput {
+  db: string;
+  op: "insert" | "update" | "delete";
+  pk?: Record<string, unknown>;
+  values?: Record<string, unknown>;
+}
+
+export interface DbRowMutationResult {
+  affected_rows: number;
+  elapsed_ms: number;
+}
+
+export interface DbCreateColumnSpec {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  primary_key: boolean;
+  default_value?: string | null;
+}
+
+export interface DbCreateTableInput {
+  db: string;
+  table: string;
+  columns: DbCreateColumnSpec[];
+}
+
 
 declare global {
   interface Window {

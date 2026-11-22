@@ -23,10 +23,11 @@ interface TabBarProps {
   onResetFontSize: () => void;
   broadcastMode?: boolean;
   onToggleBroadcast?: () => void;
-  workspaceMode?: "terminal" | "files" | "containers";
-  onChangeWorkspaceMode?: (mode: "terminal" | "files" | "containers") => void;
+  workspaceMode?: "terminal" | "files" | "containers" | "database";
+  onChangeWorkspaceMode?: (mode: "terminal" | "files" | "containers" | "database") => void;
   onOpenFiles?: () => void;
   onOpenContainers?: () => void;
+  onOpenDatabase?: () => void;
   servers: Map<number, Server>;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
@@ -64,6 +65,7 @@ export function TabBar({
   onChangeWorkspaceMode,
   onOpenFiles,
   onOpenContainers,
+  onOpenDatabase,
   servers,
   onSelect,
   onClose,
@@ -133,7 +135,7 @@ export function TabBar({
           <Icon name="menu" size={16} />
         </button>
       )}
-      {servers.size > 0 && onChangeWorkspaceMode && (
+      {onChangeWorkspaceMode && (
         <div className="workspace-mode-switch" role="tablist" aria-label="Mode Workspace">
           <button
             type="button"
@@ -146,7 +148,7 @@ export function TabBar({
             <Icon name="terminal" size={13} />
             <span>Terminal</span>
           </button>
-          {onOpenFiles && (
+          {servers.size > 0 && onOpenFiles && (
             <button
               type="button"
               role="tab"
@@ -159,7 +161,7 @@ export function TabBar({
               <span>File</span>
             </button>
           )}
-          {onOpenContainers && (
+          {servers.size > 0 && onOpenContainers && (
             <button
               type="button"
               role="tab"
@@ -170,6 +172,19 @@ export function TabBar({
             >
               <Icon name="box" size={13} />
               <span>Containers</span>
+            </button>
+          )}
+          {onOpenDatabase && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === "database"}
+              className={`workspace-mode-btn${workspaceMode === "database" ? " is-active" : ""}`}
+              onClick={onOpenDatabase}
+              title="Buka Database Client (PostgreSQL, MySQL, SQLite)"
+            >
+              <Icon name="database" size={13} />
+              <span>Database</span>
             </button>
           )}
         </div>

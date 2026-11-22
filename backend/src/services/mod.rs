@@ -8,3 +8,6 @@ pub mod paste_image;
 pub mod shell;
 pub mod transfer;
 pub mod updater;
+pub mod db_drivers;
+pub mod db_tunnel;
+pub mod db_pool;
