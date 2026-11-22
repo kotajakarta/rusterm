@@ -1,4 +1,4 @@
-# XTerm-Rust (TermDeck Port to Rust + React/Vite)
+# RusTerm (TermDeck Port to Rust + React/Vite)
 
 A high-performance, lightweight, and secure web-based multi-server SSH terminal built with:
 - **Backend**: Rust (Axum, Tokio, Russh async SSH, Rusqlite, Argon2, AES-256-GCM)
