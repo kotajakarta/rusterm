@@ -23,6 +23,10 @@ use xterm_backend::services::vault::Vault;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Pastikan rustls memiliki CryptoProvider default (ring) sebelum driver TLS seperti mysql_async dipakai,
+    // karena dependency tree mengaktifkan baik `ring` maupun `aws-lc-rs`.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let args: Vec<String> = std::env::args().collect();
     let cli = cli::parse_args(&args);
     let port = cli.port;

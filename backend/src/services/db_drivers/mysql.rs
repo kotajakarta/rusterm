@@ -44,6 +44,10 @@ impl MysqlDriver {
     }
 
     async fn connect(&self, database: &str) -> Result<Conn, DbDriverError> {
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+
         let db = if database.trim().is_empty() {
             self.default_database.trim()
         } else {

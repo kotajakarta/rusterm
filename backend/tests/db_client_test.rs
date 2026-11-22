@@ -397,3 +397,71 @@ async fn sqlite_full_lifecycle_and_read_only_guard() {
     .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn mysql_tls_connection_does_not_panic_on_rustls_provider() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    // Mock MariaDB/MySQL server advertising CLIENT_SSL in initial handshake v10
+    let server_task = tokio::spawn(async move {
+        for _ in 0..2 {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let mut payload = Vec::new();
+            payload.push(0x0a); // protocol v10
+            payload.extend_from_slice(b"10.11.6-MariaDB\0");
+            payload.extend_from_slice(&1u32.to_le_bytes()); // conn id
+            payload.extend_from_slice(b"12345678"); // auth plugin data part 1
+            payload.push(0x00); // filler
+            payload.extend_from_slice(&0x8a00u16.to_le_bytes()); // PROTOCOL_41 | SSL | SECURE_CONN
+            payload.push(0x21); // charset utf8
+            payload.extend_from_slice(&0x0002u16.to_le_bytes()); // status
+            payload.extend_from_slice(&0x0008u16.to_le_bytes()); // CLIENT_PLUGIN_AUTH
+            payload.push(21); // auth plugin data len
+            payload.extend_from_slice(&[0u8; 10]); // reserved
+            payload.extend_from_slice(b"123456789012\0"); // auth plugin data part 2
+            payload.extend_from_slice(b"mysql_native_password\0");
+
+            let len = payload.len() as u32;
+            let mut pkt = vec![
+                (len & 0xff) as u8,
+                ((len >> 8) & 0xff) as u8,
+                ((len >> 16) & 0xff) as u8,
+                0x00,
+            ];
+            pkt.extend_from_slice(&payload);
+            let _ = socket.write_all(&pkt).await;
+
+            // Read client SSLRequest or handshake response then close cleanly
+            let mut buf = [0u8; 256];
+            let _ = socket.read(&mut buf).await;
+        }
+    });
+
+    let (router, session, _dir) = setup_app().await;
+    let (st, body) = send_json(
+        &router,
+        "POST",
+        "/db/connections/test",
+        Some(&session),
+        Some(json!({
+            "engine": "mysql",
+            "host": "127.0.0.1",
+            "port": port,
+            "username": "root",
+            "password": "!secretPassword123",
+            "default_database": "auth-doc",
+            "ssl_mode": "prefer"
+        })),
+    )
+    .await;
+
+    server_task.abort();
+    // Harus mengembalikan error HTTP (502 Bad Gateway), bukan panic / ERR_EMPTY_RESPONSE
+    assert_eq!(st, StatusCode::BAD_GATEWAY, "unexpected body: {}", body);
+}
