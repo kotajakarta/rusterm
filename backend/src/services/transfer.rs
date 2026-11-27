@@ -422,6 +422,123 @@ async fn transfer(
     }))
 }
 
+async fn transfer_same_server(
+    pool: &SshPool,
+    creds: &DecryptedServerCreds,
+    spec: &TransferSpec,
+    job: &JobHandle,
+) -> Result<Option<TransferResult>, String> {
+    let paths: Vec<String> = spec
+        .rels
+        .iter()
+        .map(|r| join_remote(&spec.source_root, r))
+        .collect();
+    let mode = if spec.move_sources { "move" } else { "copy" };
+    let mut ch = open_agent(
+        pool,
+        creds,
+        &json!({
+            "op": "paste_stream",
+            "paths": paths,
+            "dest_dir": spec.dest_root,
+            "mode": mode,
+        }),
+    )
+    .await?;
+    let _ = ch.eof().await;
+
+    let mut line_buf: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let mut final_result: Option<TransferResult> = None;
+    let mut agent_err: Option<String> = None;
+
+    let process_line = |line: &[u8],
+                        job: &JobHandle,
+                        final_result: &mut Option<TransferResult>,
+                        agent_err: &mut Option<String>| {
+        let trimmed = std::str::from_utf8(line).unwrap_or("").trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            match v.get("event").and_then(Value::as_str) {
+                Some("scan") => {
+                    job.update(|j| {
+                        j.total_bytes = v.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+                        j.total_files = v.get("files").and_then(Value::as_u64).unwrap_or(0);
+                    });
+                }
+                Some("progress") => {
+                    if let Some(sent) = v.get("sent_bytes").and_then(Value::as_u64) {
+                        job.update(|j| j.sent_bytes = sent);
+                    }
+                }
+                Some("done") => {
+                    let r = &v["result"];
+                    let count = |k: &str| r.get(k).and_then(Value::as_u64).unwrap_or(0);
+                    let bytes = count("bytes");
+                    job.update(|j| {
+                        j.sent_bytes = bytes;
+                        if j.total_bytes < bytes {
+                            j.total_bytes = bytes;
+                        }
+                    });
+                    *final_result = Some(TransferResult {
+                        files: count("files"),
+                        dirs: count("dirs"),
+                        links: count("links"),
+                        bytes,
+                    });
+                }
+                Some("error") => {
+                    *agent_err = Some(
+                        v.get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Operasi copy/move gagal")
+                            .to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    };
+
+    loop {
+        tokio::select! {
+            _ = job.cancelled() => {
+                let _ = ch.close().await;
+                return Ok(None);
+            }
+            msg = ch.wait() => match msg {
+                Some(ChannelMsg::Data { ref data }) => {
+                    line_buf.extend_from_slice(data);
+                    while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
+                        let line: Vec<u8> = line_buf.drain(..=pos).collect();
+                        process_line(&line, job, &mut final_result, &mut agent_err);
+                    }
+                }
+                Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                    stderr.extend_from_slice(data);
+                }
+                Some(ChannelMsg::Close) | None => break,
+                _ => {}
+            }
+        }
+    }
+    if !line_buf.is_empty() {
+        process_line(&line_buf, job, &mut final_result, &mut agent_err);
+    }
+    let _ = ch.close().await;
+
+    if let Some(err) = agent_err {
+        return Err(err);
+    }
+    if let Some(res) = final_result {
+        return Ok(Some(res));
+    }
+    Err(agent_error(&stderr, "Operasi copy/move tidak mengembalikan hasil"))
+}
+
 /// Runs a job to completion and records its outcome; spawn it with `tokio::spawn`.
 pub async fn run_transfer(
     pool: SshPool,
@@ -430,6 +547,14 @@ pub async fn run_transfer(
     spec: TransferSpec,
     job: JobHandle,
 ) {
+    if spec.source_server_id == spec.dest_server_id && spec.remote_id.is_none() {
+        match transfer_same_server(&pool, &src, &spec, &job).await {
+            Ok(None) => {}
+            Ok(Some(result)) => job.finish_ok(result),
+            Err(e) => job.finish_err(e),
+        }
+        return;
+    }
     match transfer(&pool, &src, &dst, &spec, &job).await {
         Ok(None) => {}
         Ok(Some(result)) => {

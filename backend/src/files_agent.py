@@ -236,15 +236,194 @@ def op_paste(req):
         done.append(dst)
     return {"paths": done}
 
+def _handle_remove_readonly(func, path, _exc_info):
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.chmod(parent, os.lstat(parent).st_mode | 0o700)
+    except OSError:
+        pass
+    try:
+        st = os.lstat(path)
+        if stat.S_ISDIR(st.st_mode):
+            os.chmod(path, st.st_mode | 0o700)
+        elif not stat.S_ISLNK(st.st_mode):
+            os.chmod(path, st.st_mode | 0o600)
+    except OSError:
+        pass
+    func(path)
+
+def _rmtree(path_bytes):
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path_bytes, onexc=_handle_remove_readonly)
+    else:
+        shutil.rmtree(path_bytes, onerror=_handle_remove_readonly)
+
 def op_delete(req):
-    for raw in req["paths"]:
-        path = norm(raw)
+    norm_paths = [norm(raw) for raw in req["paths"]]
+    for path in norm_paths:
         guard(path)
-        if os.path.isdir(fs(path)) and not os.path.islink(fs(path)):
-            shutil.rmtree(fs(path))
+    # Sort shortest-first so parents are deleted before any nested children in the same selection.
+    norm_paths.sort(key=lambda p: (len(p), p))
+    deleted_roots = []
+    for path in norm_paths:
+        if any(path.startswith(root.rstrip("/") + "/") for root in deleted_roots):
+            continue
+        p_bytes = fs(path)
+        if os.path.isdir(p_bytes) and not os.path.islink(p_bytes):
+            _rmtree(p_bytes)
         else:
-            os.unlink(fs(path))
+            os.unlink(p_bytes)
+        deleted_roots.append(path)
     return {"deleted": len(req["paths"])}
+
+def _emit_json_line(out, obj):
+    out.write((json.dumps(obj) + "\n").encode("utf-8"))
+    out.flush()
+
+def _scan_paste_item(path, counts):
+    st = os.lstat(fs(path))
+    if stat.S_ISLNK(st.st_mode):
+        counts["links"] += 1
+        return
+    if stat.S_ISDIR(st.st_mode):
+        counts["dirs"] += 1
+        with os.scandir(fs(path)) as it:
+            for de in it:
+                _scan_paste_item(os.path.join(path, os.fsdecode(de.name)), counts)
+        return
+    if stat.S_ISREG(st.st_mode):
+        counts["files"] += 1
+        counts["bytes"] += st.st_size
+
+def _copy_file_progress(src, dst, state, out):
+    if stat.S_ISLNK(os.lstat(fs(src)).st_mode):
+        os.symlink(os.readlink(fs(src)), fs(dst))
+        state["links"] += 1
+        return dst
+    with open(fs(src), "rb") as fi:
+        st = os.fstat(fi.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise AgentError("Cannot copy special file: " + os.fsdecode(src))
+        fd = os.open(fs(dst), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as fo:
+            while True:
+                buf = fi.read(256 * 1024)
+                if not buf:
+                    break
+                fo.write(buf)
+                state["sent_bytes"] += len(buf)
+                state["since_emit"] += len(buf)
+                if state["since_emit"] >= 256 * 1024:
+                    state["since_emit"] = 0
+                    _emit_json_line(out, {
+                        "event": "progress",
+                        "sent_bytes": state["sent_bytes"],
+                        "files": state["files"],
+                    })
+            fo.flush()
+            os.fchmod(fo.fileno(), stat.S_IMODE(st.st_mode))
+            os.utime(fo.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns))
+    state["files"] += 1
+    state["bytes"] += st.st_size
+    state["since_emit"] = 0
+    _emit_json_line(out, {
+        "event": "progress",
+        "sent_bytes": state["sent_bytes"],
+        "files": state["files"],
+    })
+    return dst
+
+def _copy_tree_progress(src, dst, state, out):
+    st = os.lstat(fs(src))
+    os.mkdir(fs(dst), 0o700)
+    state["dirs"] += 1
+    with os.scandir(fs(src)) as it:
+        entries = list(it)
+    for de in entries:
+        name = os.fsdecode(de.name)
+        s_child = os.path.join(src, name)
+        d_child = os.path.join(dst, name)
+        if de.is_symlink():
+            os.symlink(os.readlink(fs(s_child)), fs(d_child))
+            state["links"] += 1
+        elif de.is_dir(follow_symlinks=False):
+            _copy_tree_progress(s_child, d_child, state, out)
+        else:
+            _copy_file_progress(s_child, d_child, state, out)
+    try:
+        os.chmod(fs(dst), stat.S_IMODE(st.st_mode))
+        os.utime(fs(dst), ns=(st.st_atime_ns, st.st_mtime_ns))
+    except OSError:
+        pass
+
+def op_paste_stream(req, out):
+    dest_dir = norm(req["dest_dir"])
+    move = req.get("mode") == "move"
+    if not os.path.isdir(fs(dest_dir)):
+        raise AgentError("Destination is not a directory")
+    sources = []
+    for raw in req["paths"]:
+        src = norm(raw)
+        if move:
+            guard(src)
+        if dest_dir == src or dest_dir.startswith(src.rstrip("/") + "/"):
+            raise AgentError("Cannot paste a directory into itself")
+        sources.append(src)
+
+    scan = {"files": 0, "dirs": 0, "links": 0, "bytes": 0}
+    for src in sources:
+        _scan_paste_item(src, scan)
+    _emit_json_line(out, {"event": "scan", **scan})
+
+    state = {"sent_bytes": 0, "since_emit": 0, "files": 0, "dirs": 0, "links": 0, "bytes": 0}
+    done_paths = []
+    for src in sources:
+        name = os.path.basename(src)
+        if move and os.path.dirname(src) == dest_dir:
+            continue
+        dst = _unique_dest(dest_dir, name)
+        item_scan = {"files": 0, "dirs": 0, "links": 0, "bytes": 0}
+        _scan_paste_item(src, item_scan)
+        if move:
+            try:
+                os.rename(fs(src), fs(dst))
+                state["sent_bytes"] += item_scan["bytes"]
+                state["files"] += item_scan["files"]
+                state["dirs"] += item_scan["dirs"]
+                state["links"] += item_scan["links"]
+                state["bytes"] += item_scan["bytes"]
+                _emit_json_line(out, {
+                    "event": "progress",
+                    "sent_bytes": state["sent_bytes"],
+                    "files": state["files"],
+                })
+            except OSError as e:
+                if e.errno != 18:  # EXDEV
+                    raise
+                if os.path.isdir(fs(src)) and not os.path.islink(fs(src)):
+                    _copy_tree_progress(src, dst, state, out)
+                    _rmtree(fs(src))
+                else:
+                    _copy_file_progress(src, dst, state, out)
+                    os.unlink(fs(src))
+        elif os.path.isdir(fs(src)) and not os.path.islink(fs(src)):
+            _copy_tree_progress(src, dst, state, out)
+        else:
+            _copy_file_progress(src, dst, state, out)
+        done_paths.append(dst)
+
+    _emit_json_line(out, {
+        "event": "done",
+        "result": {
+            "files": state["files"],
+            "dirs": state["dirs"],
+            "links": state["links"],
+            "bytes": state["bytes"],
+            "paths": done_paths,
+        },
+    })
+    return None
 
 def _resolve_ids(owner, group):
     uid = gid = -1
@@ -1198,6 +1377,10 @@ def main():
             op_pack(req, sys.stdout.buffer)
             sys.stdout.buffer.flush()
             return
+        if op == "paste_stream":
+            op_paste_stream(req, sys.stdout.buffer)
+            sys.stdout.buffer.flush()
+            return
         if op == "s3_read_raw":
             op_s3_read_raw(req, sys.stdout.buffer)
             sys.stdout.buffer.flush()
@@ -1227,6 +1410,9 @@ def main():
         result = {"ok": False, "error": str(e)}
     if req.get("op") == "pack":
         sys.stderr.write(json.dumps(result))
+        sys.exit(1)
+    if req.get("op") == "paste_stream":
+        _emit_json_line(sys.stdout.buffer, {"event": "error", "error": result.get("error", "Paste failed")})
         sys.exit(1)
     sys.stdout.write(json.dumps(result))
 

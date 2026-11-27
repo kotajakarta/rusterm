@@ -520,10 +520,12 @@ export function DirectTransferModal({
   const [scan, setScan] = useState<TransferScan>(initialScan);
   const [rescanning, setRescanning] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const toggleGitignore = async (checked: boolean) => {
     setUseGitignore(checked);
     setRescanning(true);
+    setErr(null);
     try {
       const next = await api.directTransferScan({
         source_server_id: sourceServerId,
@@ -535,8 +537,8 @@ export function DirectTransferModal({
         ignore: checked ? undefined : []
       });
       setScan(next);
-    } catch {
-      // keep previous scan on transient error
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to rescan transfer");
     } finally {
       setRescanning(false);
     }
@@ -544,8 +546,11 @@ export function DirectTransferModal({
 
   const confirm = async () => {
     setStarting(true);
+    setErr(null);
     try {
       await onStart(useGitignore, scan);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to start transfer");
     } finally {
       setStarting(false);
     }
@@ -581,6 +586,7 @@ export function DirectTransferModal({
               <code>node_modules</code>, <code>__pycache__</code>, <code>.env</code>
             </span>
           </label>
+          {err && <div className="fm-alert fm-alert-error" style={{ marginTop: 8 }}>{err}</div>}
         </div>
         <div className="fm-modal-footer">
           <button type="button" className="fm-btn" onClick={onCancel} disabled={starting}>
@@ -618,7 +624,9 @@ export function TransferList({
             ? 100
             : j.total_bytes > 0
               ? Math.min(99, Math.round((j.sent_bytes / j.total_bytes) * 100))
-              : 50;
+              : j.state === "running"
+                ? 15
+                : 0;
         const Icon =
           j.direction === "upload"
             ? CloudUploadIcon
@@ -679,7 +687,9 @@ export function TransferList({
                     ? j.error || "Failed"
                     : j.state === "cancelled"
                       ? "Cancelled"
-                      : "Streaming…"}
+                      : j.total_bytes > 0
+                        ? `${pct}%`
+                        : "Preparing…"}
               </span>
             </div>
           </div>

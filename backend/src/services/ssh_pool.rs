@@ -558,36 +558,15 @@ impl SshPool {
         stdin_data: &[u8],
         timeout_secs: u64,
     ) -> Result<Vec<u8>, SshError> {
-        let mut channel = self.open_channel(creds).await?;
-
-        channel.exec(true, cmd).await?;
-        if !stdin_data.is_empty() {
-            channel.data(stdin_data).await?;
+        let out = self
+            .exec_capture(creds, cmd, stdin_data, timeout_secs)
+            .await?;
+        if out.stdout.is_empty() && !out.stderr.is_empty() {
+            return Err(SshError::AgentError(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
         }
-        channel.eof().await?;
-
-        let mut output = Vec::new();
-        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
-        let read_fut = async {
-            while let Some(msg) = channel.wait().await {
-                match msg {
-                    russh::ChannelMsg::Data { ref data } => {
-                        output.extend_from_slice(data);
-                    }
-                    russh::ChannelMsg::ExtendedData { ref data, .. } => {
-                        output.extend_from_slice(data);
-                    }
-                    russh::ChannelMsg::ExitStatus { .. } | russh::ChannelMsg::Close => break,
-                    _ => {}
-                }
-            }
-        };
-
-        tokio::time::timeout(timeout_duration, read_fut)
-            .await
-            .map_err(|_| SshError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "Command timed out")))?;
-
-        Ok(output)
+        Ok(out.stdout)
     }
 
     /// Runs `cmd` and keeps stdout, stderr and the exit status apart, so callers can tell a
@@ -650,7 +629,7 @@ impl SshPool {
         let cmd = build_agent_command();
         let stdin_bytes = serde_json::to_vec(payload)
             .map_err(|e| SshError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
-        let out_bytes = self.run_command_with_stdin(creds, &cmd, &stdin_bytes, 60).await?;
+        let out_bytes = self.run_command_with_stdin(creds, &cmd, &stdin_bytes, 180).await?;
         let out_str = String::from_utf8_lossy(&out_bytes);
         let parsed: serde_json::Value = serde_json::from_str(out_str.trim()).map_err(|e| {
             SshError::AgentError(format!("Failed to parse agent output: {}. Raw: {}", e, out_str))

@@ -86,3 +86,98 @@ fn pack_without_credits_aborts_when_stdin_closes() {
     // At most one credit window worth of data may have been emitted.
     assert!(out.stdout.len() <= 2 * 1024 * 1024, "{} bytes", out.stdout.len());
 }
+
+#[test]
+fn delete_removes_readonly_dirs_files_symlinks_and_nested_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let work = tempdir().unwrap();
+    let ro_dir = work.path().join("ro_dir");
+    let nested = ro_dir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let ro_file = nested.join("secret.txt");
+    std::fs::write(&ro_file, b"locked").unwrap();
+    std::fs::set_permissions(&ro_file, std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o555)).unwrap();
+    std::fs::set_permissions(&ro_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let plain = work.path().join("plain.txt");
+    std::fs::write(&plain, b"ok").unwrap();
+    let broken_link = work.path().join("broken");
+    std::os::unix::fs::symlink("/does/not/exist", &broken_link).unwrap();
+
+    let req = serde_json::json!({
+        "op": "delete",
+        "paths": [
+            ro_file.to_str().unwrap(),
+            ro_dir.to_str().unwrap(),
+            plain.to_str().unwrap(),
+            broken_link.to_str().unwrap(),
+        ]
+    })
+    .to_string();
+
+    let out = run_agent(req.as_bytes());
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let res: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stdout JSON");
+    assert_eq!(res["ok"], true, "{}", res);
+    assert!(!ro_dir.exists());
+    assert!(!plain.exists());
+    assert!(!broken_link.exists());
+}
+
+#[test]
+fn paste_stream_emits_scan_progress_and_done_for_copy_and_move() {
+    let src_root = make_tree();
+    let dst_copy = tempdir().unwrap();
+    let copy_req = serde_json::json!({
+        "op": "paste_stream",
+        "paths": [
+            src_root.path().join("sub").to_str().unwrap(),
+            src_root.path().join("a.txt").to_str().unwrap(),
+        ],
+        "dest_dir": dst_copy.path().to_str().unwrap(),
+        "mode": "copy",
+    })
+    .to_string()
+        + "\n";
+
+    let out = run_agent(copy_req.as_bytes());
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("valid NDJSON line"))
+        .collect();
+    assert_eq!(events.first().unwrap()["event"], "scan");
+    assert!(events.iter().any(|e| e["event"] == "progress"));
+    let done = events.last().unwrap();
+    assert_eq!(done["event"], "done");
+    assert_eq!(done["result"]["files"], 2);
+    assert_eq!(
+        std::fs::read(dst_copy.path().join("sub/big.bin")).unwrap(),
+        big_payload()
+    );
+    assert!(src_root.path().join("sub/big.bin").exists());
+
+    // Now test move
+    let dst_move = tempdir().unwrap();
+    let move_req = serde_json::json!({
+        "op": "paste_stream",
+        "paths": [src_root.path().join("a.txt").to_str().unwrap()],
+        "dest_dir": dst_move.path().to_str().unwrap(),
+        "mode": "move",
+    })
+    .to_string()
+        + "\n";
+    let move_out = run_agent(move_req.as_bytes());
+    assert!(move_out.status.success(), "stderr: {}", String::from_utf8_lossy(&move_out.stderr));
+    let move_events: Vec<serde_json::Value> = String::from_utf8_lossy(&move_out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("valid NDJSON line"))
+        .collect();
+    assert_eq!(move_events.last().unwrap()["event"], "done");
+    assert!(!src_root.path().join("a.txt").exists());
+    assert_eq!(std::fs::read(dst_move.path().join("a.txt")).unwrap(), b"hello");
+}

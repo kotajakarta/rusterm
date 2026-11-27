@@ -91,6 +91,10 @@ export function FilesView({
   const [clipboard, setClipboard] = useState<ClipboardState | null>(null);
   const [remotes, setRemotes] = useState<FileRemote[]>([]);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
+  const [transferNotice, setTransferNotice] = useState<{
+    kind: "info" | "error";
+    text: string;
+  } | null>(null);
   const [detailsHost, setDetailsHost] = useState<HTMLDivElement | null>(null);
   const [directPrompt, setDirectPrompt] = useState<{
     mode: "copy" | "move";
@@ -128,28 +132,43 @@ export function FilesView({
   }, [loadRemotes]);
 
   // Poll running transfer jobs
+  const runningIdsKey = useMemo(
+    () =>
+      jobs
+        .filter((j) => j.state === "running")
+        .map((j) => j.id)
+        .join(","),
+    [jobs]
+  );
+
   useEffect(() => {
-    const running = jobs.filter((j) => j.state === "running");
-    if (running.length === 0) return;
-    const t = setInterval(async () => {
+    if (!runningIdsKey) return;
+    const ids = runningIdsKey.split(",");
+    let alive = true;
+    const poll = async () => {
       const updates = await Promise.all(
-        running.map((j) => api.getTransfer(j.id).catch(() => j))
+        ids.map((id) => api.getTransfer(id).catch(() => null))
       );
-      let anyFinished = false;
+      if (!alive) return;
+      const valid = updates.filter((u): u is TransferJob => u !== null);
+      if (valid.length === 0) return;
+      const anyFinished = valid.some((u) => u.state !== "running");
       setJobs((prev) =>
-        prev.map((p) => {
-          const u = updates.find((x) => x.id === p.id);
-          if (u && p.state === "running" && u.state !== "running") anyFinished = true;
-          return u ?? p;
-        })
+        prev.map((p) => valid.find((x) => x.id === p.id) ?? p)
       );
       if (anyFinished) {
         leftRef.current?.refresh();
         rightRef.current?.refresh();
       }
-    }, 800);
-    return () => clearInterval(t);
-  }, [jobs]);
+    };
+    const t = setInterval(() => {
+      void poll();
+    }, 500);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [runningIdsKey]);
 
   const handleLeftPathChange = useCallback((p: string) => {
     setLeftPath(p);
@@ -204,6 +223,32 @@ export function FilesView({
       dstDir: string
     ) => {
       const paths = names.map((n) => joinPath(srcDir, n));
+      if (srcServerId === dstServerId) {
+        setTransferNotice(null);
+        try {
+          const job = await api.directTransferStart({
+            source_server_id: srcServerId,
+            dest_server_id: dstServerId,
+            source_dir: srcDir,
+            dest_dir: dstDir,
+            paths,
+            mode,
+            use_gitignore: false,
+            ignore: []
+          });
+          setJobs((prev) => [job, ...prev]);
+        } catch (e) {
+          setTransferNotice({
+            kind: "error",
+            text: e instanceof Error ? e.message : `Failed to ${mode} items`
+          });
+        }
+        return;
+      }
+      setTransferNotice({
+        kind: "info",
+        text: `Scanning ${names.length} item(s) for ${mode}…`
+      });
       try {
         const scan = await api.directTransferScan({
           source_server_id: srcServerId,
@@ -213,6 +258,7 @@ export function FilesView({
           paths,
           use_gitignore: true
         });
+        setTransferNotice(null);
         setDirectPrompt({
           mode,
           srcServerId,
@@ -222,8 +268,11 @@ export function FilesView({
           paths,
           initialScan: scan
         });
-      } catch {
-        // ignore
+      } catch (e) {
+        setTransferNotice({
+          kind: "error",
+          text: e instanceof Error ? e.message : "Failed to scan transfer"
+        });
       }
     },
     []
@@ -388,6 +437,22 @@ export function FilesView({
           </aside>
         )}
       </div>
+
+      {transferNotice && (
+        <div
+          className={`fm-toast fm-toast-${transferNotice.kind}`}
+          style={{ position: "fixed", right: 16, bottom: jobs.length > 0 ? 110 : 16, zIndex: 1010 }}
+        >
+          <span>{transferNotice.text}</span>
+          <button
+            type="button"
+            className="fm-icon-btn"
+            onClick={() => setTransferNotice(null)}
+          >
+            <XIcon size={12} />
+          </button>
+        </div>
+      )}
 
       <TransferList
         jobs={jobs}

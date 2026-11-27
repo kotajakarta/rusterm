@@ -257,6 +257,7 @@ export function FilePane({
 
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [externalDragOver, setExternalDragOver] = useState(false);
+  const [internalDragOver, setInternalDragOver] = useState(false);
   const [dropTargetDir, setDropTargetDir] = useState<string | null>(null);
   const [dropPrompt, setDropPrompt] = useState<DropPromptState | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -573,7 +574,7 @@ export function FilePane({
       const src = payload ?? (clipboard ? { ...clipboard } : null);
       if (!src || src.names.length === 0) return;
       const isMove = moveOverride ?? (clipboard?.mode === "cut" && !payload);
-      if (src.serverId !== serverId) {
+      if (src.serverId !== serverId || src.dirPath !== destDir) {
         onTransferToOther(
           isMove ? "move" : "copy",
           src.serverId,
@@ -622,33 +623,18 @@ export function FilePane({
       }
       const list = entries ?? selectedEntries;
       if (list.length === 0) return;
-      if (otherPane.serverId !== serverId) {
-        onTransferToOther(
-          mode,
-          serverId,
-          currentPath,
-          list.map((e) => e.name),
-          otherPane.serverId,
-          otherPane.path
-        );
+      if (otherPane.serverId === serverId && otherPane.path === currentPath) {
+        showToast("info", "Both panes are showing the same directory");
         return;
       }
-      try {
-        await api.filesAction(serverId, {
-          op: "paste",
-          paths: list.map((e) => e.path || joinPath(currentPath, e.name)),
-          dest_dir: otherPane.path,
-          mode
-        });
-        await loadDir(currentPath, true);
-        onRefreshOther();
-        showToast(
-          "ok",
-          `${mode === "copy" ? "Copied" : "Moved"} ${list.length} item(s) → ${otherPane.path}`
-        );
-      } catch (e) {
-        showToast("error", e instanceof Error ? e.message : "Transfer failed");
-      }
+      onTransferToOther(
+        mode,
+        serverId,
+        currentPath,
+        list.map((e) => e.name),
+        otherPane.serverId,
+        otherPane.path
+      );
     },
     [
       otherPane,
@@ -870,6 +856,7 @@ export function FilePane({
   const onRowDragEnd = () => {
     currentDrag = null;
     setDropTargetDir(null);
+    setInternalDragOver(false);
   };
 
   const isInternalDrag = (ev: React.DragEvent) =>
@@ -890,6 +877,7 @@ export function FilePane({
     ev.stopPropagation();
     setDropTargetDir(null);
     setExternalDragOver(false);
+    setInternalDragOver(false);
 
     const payload = readDragPayload(ev);
     if (payload) {
@@ -972,8 +960,8 @@ export function FilePane({
     onActivate();
     if (!selected.has(entry.name)) selectOnly(entry.name);
     setContextMenu({
-      x: Math.min(ev.clientX, window.innerWidth - 240),
-      y: Math.min(ev.clientY, window.innerHeight - 320),
+      x: Math.max(8, Math.min(ev.clientX, window.innerWidth - 250)),
+      y: Math.max(8, Math.min(ev.clientY, window.innerHeight - 440)),
       kind: "item",
       targetEntry: entry
     });
@@ -984,8 +972,8 @@ export function FilePane({
     ev.stopPropagation();
     onActivate();
     setContextMenu({
-      x: Math.min(ev.clientX, window.innerWidth - 240),
-      y: Math.min(ev.clientY, window.innerHeight - 280),
+      x: Math.max(8, Math.min(ev.clientX, window.innerWidth - 250)),
+      y: Math.max(8, Math.min(ev.clientY, window.innerHeight - 300)),
       kind: "dir"
     });
   };
@@ -1133,15 +1121,27 @@ export function FilePane({
     <div
       ref={paneRootRef}
       tabIndex={0}
-      className={`fm-pane ${active ? "active" : ""}`}
+      className={`fm-pane ${active ? "active" : ""} ${internalDragOver ? "internal-drop-target" : ""}`}
       onMouseDown={onActivate}
       onKeyDown={handleKeyDown}
       onDragOver={(ev) => {
         ev.preventDefault();
-        if (!isInternalDrag(ev)) setExternalDragOver(true);
+        if (isInternalDrag(ev)) {
+          ev.dataTransfer.dropEffect = ev.shiftKey ? "move" : "copy";
+          const isSameDir =
+            currentDrag !== null &&
+            currentDrag.serverId === serverId &&
+            currentDrag.dirPath === currentPath;
+          setInternalDragOver(!isSameDir);
+        } else {
+          setExternalDragOver(true);
+        }
       }}
       onDragLeave={(ev) => {
-        if (ev.currentTarget === ev.target) setExternalDragOver(false);
+        if (!ev.currentTarget.contains(ev.relatedTarget as Node | null)) {
+          setExternalDragOver(false);
+          setInternalDragOver(false);
+        }
       }}
       onDrop={(ev) => handleDropOnDir(ev, currentPath)}
     >
@@ -2542,6 +2542,7 @@ export function FilePane({
             setSelected(new Set());
             setFocused(null);
             await loadDir(currentPath, false);
+            if (otherPane && otherPane.serverId === serverId) onRefreshOther();
             showToast("ok", `Deleted ${deleteModal.length} item(s)`);
           }}
         />
