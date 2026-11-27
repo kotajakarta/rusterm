@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { serverColor } from "../format";
 import type { Server, Tab, UpdateCheckResult } from "../types";
 import {
@@ -8,6 +8,7 @@ import {
   layoutDimensions,
   type LayoutKind,
 } from "../layout";
+import { computeTabScrollState, filterOpenTabs, type TabScrollState } from "../tabStrip";
 import { Icon, type IconName } from "./Icon";
 import { SnapLayoutPicker } from "./SnapLayoutPicker";
 
@@ -79,12 +80,26 @@ export function TabBar({
 }: TabBarProps) {
   const [showSnapPicker, setShowSnapPicker] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [showTabMenu, setShowTabMenu] = useState(false);
+  const [tabMenuQuery, setTabMenuQuery] = useState("");
+  const [scrollState, setScrollState] = useState<TabScrollState>({
+    hasOverflow: false,
+    canScrollLeft: false,
+    canScrollRight: false,
+  });
   const pickerRef = useRef<HTMLDivElement>(null);
+  const tabMenuRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const currentDims = layoutDimensions(layout);
   const [hoverDims, setHoverDims] = useState<{ rows: number; cols: number } | null>(null);
   const [manualRows, setManualRows] = useState(currentDims.rows);
   const [manualCols, setManualCols] = useState(currentDims.cols);
+
+  const syncScrollState = useCallback(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    setScrollState(computeTabScrollState(el.scrollLeft, el.clientWidth, el.scrollWidth));
+  }, []);
 
   useEffect(() => {
     setManualRows(currentDims.rows);
@@ -96,20 +111,39 @@ export function TabBar({
     tabsRef.current
       ?.querySelector<HTMLElement>(".tab.is-active")
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeId, tabs.length]);
+    syncScrollState();
+  }, [activeId, tabs.length, syncScrollState]);
 
   useEffect(() => {
-    if (!showPicker && !showSnapPicker) return;
+    const el = tabsRef.current;
+    if (!el) return;
+    syncScrollState();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncScrollState) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", syncScrollState);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", syncScrollState);
+    };
+  }, [syncScrollState, tabs.length]);
+
+  useEffect(() => {
+    if (!showPicker && !showSnapPicker && !showTabMenu) return;
     const onPointerDown = (e: PointerEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (pickerRef.current && !pickerRef.current.contains(target)) {
         setShowPicker(false);
         setShowSnapPicker(false);
+      }
+      if (tabMenuRef.current && !tabMenuRef.current.contains(target)) {
+        setShowTabMenu(false);
       }
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setShowPicker(false);
         setShowSnapPicker(false);
+        setShowTabMenu(false);
       }
     };
     window.addEventListener("pointerdown", onPointerDown);
@@ -118,7 +152,26 @@ export function TabBar({
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [showPicker, showSnapPicker]);
+  }, [showPicker, showSnapPicker, showTabMenu]);
+
+  const searchableTabs = useMemo(
+    () =>
+      tabs.map((t) => ({
+        ...t,
+        serverName: servers.get(t.serverId)?.name ?? "",
+      })),
+    [tabs, servers],
+  );
+  const filteredMenuTabs = useMemo(
+    () => filterOpenTabs(searchableTabs, tabMenuQuery),
+    [searchableTabs, tabMenuQuery],
+  );
+
+  const scrollTabsBy = (delta: number) => {
+    const el = tabsRef.current;
+    if (!el) return;
+    el.scrollBy({ left: delta, behavior: "smooth" });
+  };
 
   const displayRows = hoverDims ? hoverDims.rows : currentDims.rows;
   const displayCols = hoverDims ? hoverDims.cols : currentDims.cols;
@@ -204,40 +257,157 @@ export function TabBar({
           )}
         </div>
       )}
-      <div className="tabs" role="tablist" aria-label="Terminal terbuka" ref={tabsRef}>
-        {tabs.map((tab) => {
-          const server = servers.get(tab.serverId);
-          return (
-            <div
-              key={tab.id}
-              role="tab"
-              tabIndex={0}
-              aria-selected={tab.id === activeId}
-              className={`tab${tab.id === activeId ? " is-active" : ""}${
-                visibleIds.has(tab.id) ? " is-visible" : ""
-              } status-${tab.status}`}
-              style={{ ["--srv" as string]: serverColor(server?.color ?? "") }}
-              onClick={() => onSelect(tab.id)}
-              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect(tab.id)}
-              onAuxClick={(e) => e.button === 1 && onClose(tab.id)}
-              title={`${tab.title} (${STATUS_LABEL[tab.status]})`}
-            >
-              <span className="tab-status" aria-label={STATUS_LABEL[tab.status]} />
-              <span className="tab-title">{tab.title}</span>
-              <button
-                type="button"
-                className="tab-close"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onClose(tab.id);
-                }}
-                aria-label={`Tutup ${tab.title}`}
+      <div className="tabs-strip-wrap">
+        {scrollState.hasOverflow && (
+          <button
+            type="button"
+            className="tab-scroll-btn"
+            disabled={!scrollState.canScrollLeft}
+            onClick={() => scrollTabsBy(-220)}
+            title="Geser tab ke kiri"
+            aria-label="Geser tab ke kiri"
+          >
+            <Icon name="chevronLeft" size={14} />
+          </button>
+        )}
+        <div
+          className="tabs"
+          role="tablist"
+          aria-label="Terminal terbuka"
+          ref={tabsRef}
+          onScroll={syncScrollState}
+          onWheel={(e) => {
+            const el = tabsRef.current;
+            if (!el || el.scrollWidth <= el.clientWidth) return;
+            if (Math.abs(e.deltaY) >= Math.abs(e.deltaX)) {
+              e.preventDefault();
+              el.scrollLeft += e.deltaY;
+              syncScrollState();
+            }
+          }}
+        >
+          {tabs.map((tab) => {
+            const server = servers.get(tab.serverId);
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                tabIndex={0}
+                aria-selected={tab.id === activeId}
+                className={`tab${tab.id === activeId ? " is-active" : ""}${
+                  visibleIds.has(tab.id) ? " is-visible" : ""
+                } status-${tab.status}`}
+                style={{ ["--srv" as string]: serverColor(server?.color ?? "") }}
+                onClick={() => onSelect(tab.id)}
+                onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onSelect(tab.id)}
+                onAuxClick={(e) => e.button === 1 && onClose(tab.id)}
+                title={`${tab.title} (${STATUS_LABEL[tab.status]})`}
               >
-                <Icon name="close" size={12} />
-              </button>
-            </div>
-          );
-        })}
+                <span className="tab-status" aria-label={STATUS_LABEL[tab.status]} />
+                <span className="tab-title">{tab.title}</span>
+                <button
+                  type="button"
+                  className="tab-close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClose(tab.id);
+                  }}
+                  aria-label={`Tutup ${tab.title}`}
+                >
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {scrollState.hasOverflow && (
+          <button
+            type="button"
+            className="tab-scroll-btn"
+            disabled={!scrollState.canScrollRight}
+            onClick={() => scrollTabsBy(220)}
+            title="Geser tab ke kanan"
+            aria-label="Geser tab ke kanan"
+          >
+            <Icon name="chevron" size={14} />
+          </button>
+        )}
+        {tabs.length > 1 && (
+          <div className="tab-overflow-wrap" ref={tabMenuRef}>
+            <button
+              type="button"
+              className={`tab-overflow-btn${showTabMenu ? " is-open" : ""}`}
+              onClick={() => {
+                setShowTabMenu((v) => !v);
+                setTabMenuQuery("");
+              }}
+              aria-expanded={showTabMenu}
+              aria-haspopup="dialog"
+              title={`Daftar semua terminal terbuka (${tabs.length})`}
+            >
+              <span>{tabs.length}</span>
+              <Icon name="down" size={12} />
+            </button>
+            {showTabMenu && (
+              <div className="tab-overflow-menu" role="dialog" aria-label="Daftar tab terminal terbuka">
+                <div className="tab-overflow-search-wrap">
+                  <Icon name="search" size={13} />
+                  <input
+                    type="search"
+                    className="tab-overflow-search"
+                    placeholder="Cari terminal terbuka..."
+                    value={tabMenuQuery}
+                    onChange={(e) => setTabMenuQuery(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+                <div className="tab-overflow-list">
+                  {filteredMenuTabs.length === 0 && (
+                    <div className="tab-overflow-empty">Tidak ada tab yang cocok.</div>
+                  )}
+                  {filteredMenuTabs.map((tab) => {
+                    const server = servers.get(tab.serverId);
+                    return (
+                      <div
+                        key={tab.id}
+                        className={`tab-overflow-item${tab.id === activeId ? " is-active" : ""}${
+                          visibleIds.has(tab.id) ? " is-visible" : ""
+                        } status-${tab.status}`}
+                        style={{ ["--srv" as string]: serverColor(server?.color ?? "") }}
+                        onClick={() => {
+                          onSelect(tab.id);
+                          onChangeWorkspaceMode?.("terminal");
+                          setShowTabMenu(false);
+                        }}
+                      >
+                        <span className="tab-overflow-bar" />
+                        <span className="tab-status" aria-label={STATUS_LABEL[tab.status]} />
+                        <div className="tab-overflow-text">
+                          <span className="tab-overflow-title">{tab.title}</span>
+                          {tab.serverName && (
+                            <span className="tab-overflow-server">{tab.serverName}</span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="tab-close"
+                          title={`Tutup ${tab.title}`}
+                          aria-label={`Tutup ${tab.title}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onClose(tab.id);
+                          }}
+                        >
+                          <Icon name="close" size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="font-switch" role="group" aria-label="Ukuran huruf terminal">
         <button
