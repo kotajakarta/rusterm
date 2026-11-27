@@ -15,7 +15,7 @@ import type {
 
 function buildHeaders(extra?: Record<string, string>): HeadersInit {
   const headers: Record<string, string> = { ...(extra ?? {}) };
-  if (token) headers["X-RusTerm-Token"] = token;
+  if (token) headers["X-Token"] = token;
   const session = getSession();
   if (session) headers["X-Session"] = session;
   return headers;

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   STORAGE_PROVIDER_PRESETS,
   buildBreadcrumbs,
@@ -44,4 +45,10 @@ test("formatTransferDirection returns readable labels", () => {
   assert.ok(formatTransferDirection("ssh_to_s3").includes("SSH"));
   assert.ok(formatTransferDirection("s3_to_ssh").includes("SSH"));
   assert.ok(formatTransferDirection("s3_to_s3").includes("S3"));
+});
+
+test("storageApi sends X-Token header expected by request_guard", () => {
+  const src = readFileSync(new URL("../src/storageApi.ts", import.meta.url), "utf8");
+  assert.match(src, /headers\["X-Token"\]\s*=\s*token/);
+  assert.doesNotMatch(src, /X-RusTerm-Token/);
 });
