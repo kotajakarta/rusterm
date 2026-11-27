@@ -1040,11 +1040,153 @@ def op_replace(req):
         "errors": errors,
     }
 
+def op_s3_walk(req):
+    root = norm(req["path"])
+    root_b = fs(root)
+    st = os.lstat(root_b)
+    files = []
+    if stat.S_ISREG(st.st_mode):
+        files.append({"rel": os.path.basename(root), "path": root, "size": st.st_size})
+        return {"root": os.path.dirname(root), "is_file": True, "files": files}
+    if not stat.S_ISDIR(st.st_mode):
+        raise AgentError("Source path must be a regular file or directory")
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for fn in sorted(filenames):
+            full = os.path.join(dirpath, fn)
+            try:
+                fst = os.lstat(fs(full))
+            except OSError:
+                continue
+            if not stat.S_ISREG(fst.st_mode):
+                continue
+            rel = os.path.relpath(full, root).replace("\\", "/")
+            files.append({"rel": rel, "path": full, "size": fst.st_size})
+    return {"root": root, "is_file": False, "files": files}
+
+def _open_http_conn(url_str):
+    import http.client
+    import urllib.parse
+    parsed = urllib.parse.urlsplit(url_str)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise AgentError("Invalid presigned URL scheme")
+    path_q = parsed.path or "/"
+    if parsed.query:
+        path_q = path_q + "?" + parsed.query
+    if parsed.scheme == "https":
+        conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=120)
+    else:
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=120)
+    return conn, path_q
+
+def op_http_put_file(req):
+    path = norm(req["path"])
+    url_str = req["url"]
+    content_type = req.get("content_type") or "application/octet-stream"
+    st = os.stat(fs(path))
+    conn, path_q = _open_http_conn(url_str)
+    try:
+        conn.putrequest("PUT", path_q)
+        conn.putheader("Content-Length", str(st.st_size))
+        conn.putheader("Content-Type", content_type)
+        conn.endheaders()
+        sent = 0
+        with open(fs(path), "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                conn.send(chunk)
+                sent += len(chunk)
+        resp = conn.getresponse()
+        body = resp.read(2048)
+        if resp.status < 200 or resp.status >= 300:
+            raise AgentError("HTTP PUT failed (%d): %s" % (resp.status, body.decode("utf-8", "replace")[:200]))
+        return {"bytes": sent, "status": resp.status}
+    finally:
+        conn.close()
+
+def op_http_get_file(req):
+    path = norm(req["path"])
+    guard(path)
+    url_str = req["url"]
+    overwrite = req.get("overwrite", True)
+    if not overwrite and os.path.exists(fs(path)):
+        return {"bytes": 0, "skipped": True}
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(fs(parent), exist_ok=True)
+    tmp_path = os.path.join(parent or "/", ".rusterm-s3-%d-%s.tmp" % (os.getpid(), os.path.basename(path)))
+    conn, path_q = _open_http_conn(url_str)
+    written = 0
+    try:
+        conn.request("GET", path_q)
+        resp = conn.getresponse()
+        if resp.status < 200 or resp.status >= 300:
+            body = resp.read(2048)
+            raise AgentError("HTTP GET failed (%d): %s" % (resp.status, body.decode("utf-8", "replace")[:200]))
+        with open(fs(tmp_path), "wb") as f:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                written += len(chunk)
+        os.replace(fs(tmp_path), fs(path))
+        return {"bytes": written, "status": resp.status}
+    except Exception:
+        try:
+            if os.path.exists(fs(tmp_path)):
+                os.unlink(fs(tmp_path))
+        except OSError:
+            pass
+        raise
+    finally:
+        conn.close()
+
+def op_s3_read_raw(req, out_stream):
+    path = norm(req["path"])
+    with open(fs(path), "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            out_stream.write(chunk)
+
+def op_s3_write_raw(req, in_stream):
+    path = norm(req["path"])
+    guard(path)
+    overwrite = req.get("overwrite", True)
+    if not overwrite and os.path.exists(fs(path)):
+        return {"bytes": 0, "skipped": True}
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(fs(parent), exist_ok=True)
+    tmp_path = os.path.join(parent or "/", ".rusterm-s3-%d-%s.tmp" % (os.getpid(), os.path.basename(path)))
+    written = 0
+    try:
+        with open(fs(tmp_path), "wb") as f:
+            while True:
+                chunk = in_stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                written += len(chunk)
+        os.replace(fs(tmp_path), fs(path))
+        return {"bytes": written}
+    except Exception:
+        try:
+            if os.path.exists(fs(tmp_path)):
+                os.unlink(fs(tmp_path))
+        except OSError:
+            pass
+        raise
+
 OPS = {
     "list": op_list, "stat": op_stat, "read": op_read, "write": op_write, "mkdir": op_mkdir,
     "symlink": op_symlink, "rename": op_rename, "paste": op_paste, "delete": op_delete,
     "chmod": op_chmod, "principals": op_principals, "scan": op_scan, "ls": op_ls,
     "search": op_search, "replace": op_replace,
+    "s3_walk": op_s3_walk, "http_put_file": op_http_put_file, "http_get_file": op_http_get_file,
 }
 
 def main():
@@ -1056,8 +1198,14 @@ def main():
             op_pack(req, sys.stdout.buffer)
             sys.stdout.buffer.flush()
             return
+        if op == "s3_read_raw":
+            op_s3_read_raw(req, sys.stdout.buffer)
+            sys.stdout.buffer.flush()
+            return
         if op == "unpack":
             result = {"ok": True, "result": op_unpack(req, sys.stdin.buffer)}
+        elif op == "s3_write_raw":
+            result = {"ok": True, "result": op_s3_write_raw(req, sys.stdin.buffer)}
         elif op == "upload":
             result = {"ok": True, "result": op_upload(req, sys.stdin.buffer)}
         elif op == "paste_image":

@@ -53,6 +53,8 @@ export interface BackupStats {
   snippets_added: number;
   db_connections_added?: number;
   db_connections_updated?: number;
+  storage_accounts_added?: number;
+  storage_accounts_updated?: number;
 }
 
 export interface ContainerDbHint {
@@ -765,3 +767,127 @@ declare global {
   }
 }
 
+
+export type StorageProvider = "r2" | "aws" | "minio" | "custom";
+
+export interface StorageAccount {
+  id: number;
+  name: string;
+  provider: StorageProvider | string;
+  endpoint: string;
+  region: string;
+  access_key_id: string;
+  has_secret: boolean;
+  default_bucket: string;
+  path_style: boolean;
+  created_at: string;
+}
+
+export interface StorageAccountInput {
+  name: string;
+  provider: string;
+  endpoint: string;
+  region: string;
+  access_key_id: string;
+  secret_access_key: string;
+  default_bucket: string;
+  path_style: boolean;
+}
+
+export interface StorageAccountUpdateInput {
+  name: string;
+  provider: string;
+  endpoint: string;
+  region: string;
+  access_key_id: string;
+  secret_access_key?: string | null;
+  default_bucket: string;
+  path_style: boolean;
+}
+
+export interface StorageAccountVerifyInput {
+  account_id?: number | null;
+  provider: string;
+  endpoint: string;
+  region: string;
+  access_key_id: string;
+  secret_access_key?: string | null;
+  default_bucket: string;
+  path_style: boolean;
+}
+
+export interface StorageVerifyOut {
+  ok: boolean;
+  message: string;
+  buckets_count: number;
+  scoped_bucket_fallback: boolean;
+}
+
+export interface StorageBucket {
+  name: string;
+  creation_date: string;
+}
+
+export interface StorageObject {
+  key: string;
+  name: string;
+  is_dir: boolean;
+  size: number;
+  last_modified: string;
+  etag: string;
+}
+
+export interface StorageListOut {
+  bucket: string;
+  prefix: string;
+  entries: StorageObject[];
+  is_truncated: boolean;
+  next_continuation_token: string | null;
+}
+
+export interface StorageDeleteOut {
+  deleted: string[];
+  failed: string[];
+}
+
+export interface StoragePresignOut {
+  url: string;
+  expires_secs: number;
+}
+
+export type StorageTransferDirection = "ssh_to_s3" | "s3_to_ssh" | "s3_to_s3";
+export type StorageTransferMode = "auto" | "direct" | "relay";
+
+export interface StorageTransferCreateInput {
+  direction: StorageTransferDirection;
+  mode: StorageTransferMode;
+  overwrite: boolean;
+  server_id?: number;
+  ssh_path?: string;
+  account_id?: number;
+  bucket?: string;
+  s3_prefix?: string;
+  source_account_id?: number;
+  source_bucket?: string;
+  source_prefix?: string;
+  dest_account_id?: number;
+  dest_bucket?: string;
+  dest_prefix?: string;
+}
+
+export interface StorageTransferJob {
+  id: string;
+  direction: StorageTransferDirection | string;
+  state: "queued" | "running" | "done" | "failed" | "cancelled" | string;
+  requested_mode: string;
+  effective_mode: string;
+  source_label: string;
+  dest_label: string;
+  total_files: number;
+  transferred_files: number;
+  total_bytes: number;
+  transferred_bytes: number;
+  current_file: string;
+  error: string | null;
+  created_at: string;
+}

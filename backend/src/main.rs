@@ -8,15 +8,18 @@ use xterm_backend::cli;
 use xterm_backend::controllers::db_client::DbClientAppState;
 use xterm_backend::controllers::servers::AppState;
 use xterm_backend::controllers::static_files::StaticConfig;
+use xterm_backend::controllers::storage::StorageAppState;
 use xterm_backend::controllers::terminal_ws::WsAppState;
 use xterm_backend::controllers::{
     api_errors, auth, bookmarks, cloudflare, config, containers, db_client, files, request_guard,
-    servers, snippets, static_files, system, tailscale, terminal_ws,
+    servers, snippets, static_files, storage, system, tailscale, terminal_ws,
 };
 use xterm_backend::models::db::DbStore;
 use xterm_backend::services::app_launcher;
 use xterm_backend::services::cloudflare::CloudflareClient;
 use xterm_backend::services::db_pool::DbClientPool;
+use xterm_backend::services::s3::S3Client;
+use xterm_backend::services::storage_transfer::StorageTransferManager;
 use xterm_backend::services::tailscale::TailscaleClient;
 use xterm_backend::services::ssh_pool::SshPool;
 use xterm_backend::services::vault::Vault;
@@ -120,6 +123,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_pool: db_client_pool.clone(),
     };
 
+    let storage_state = StorageAppState {
+        app: app_state.clone(),
+        s3: S3Client::new(),
+        storage_transfers: StorageTransferManager::new(),
+    };
+
     // Generate random 32-character hex token for session protection in index.html
     let rusterm_token = cli.token.clone().unwrap_or_else(|| {
         let mut token_bytes = [0u8; 16];
@@ -149,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api", tailscale::router(app_state.clone()))
         .nest("/api", system::router(app_state.clone()))
         .nest("/api", db_client::router(db_client_state))
+        .nest("/api", storage::router(storage_state))
         .layer(axum::middleware::map_response(api_errors::wrap_plain_errors));
 
     let ws_router = terminal_ws::router(ws_state);

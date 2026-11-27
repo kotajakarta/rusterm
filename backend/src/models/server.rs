@@ -136,12 +136,32 @@ pub struct BackupDbConnection {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BackupStorageAccount {
+    pub name: String,
+    pub provider: String,
+    pub endpoint: String,
+    pub region: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    #[serde(default)]
+    pub default_bucket: String,
+    #[serde(default = "default_true_backup")]
+    pub path_style: bool,
+}
+
+fn default_true_backup() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BackupPayload {
     pub version: u32,
     pub servers: Vec<BackupServer>,
     pub snippets: Vec<BackupSnippet>,
     #[serde(default)]
     pub db_connections: Vec<BackupDbConnection>,
+    #[serde(default)]
+    pub storage_accounts: Vec<BackupStorageAccount>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -171,5 +191,9 @@ pub struct BackupStats {
     pub db_connections_added: i64,
     #[serde(default)]
     pub db_connections_updated: i64,
+    #[serde(default)]
+    pub storage_accounts_added: i64,
+    #[serde(default)]
+    pub storage_accounts_updated: i64,
 }
 

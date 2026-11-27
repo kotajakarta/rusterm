@@ -23,11 +23,12 @@ interface TabBarProps {
   onResetFontSize: () => void;
   broadcastMode?: boolean;
   onToggleBroadcast?: () => void;
-  workspaceMode?: "terminal" | "files" | "containers" | "database";
-  onChangeWorkspaceMode?: (mode: "terminal" | "files" | "containers" | "database") => void;
+  workspaceMode?: "terminal" | "files" | "containers" | "database" | "storage";
+  onChangeWorkspaceMode?: (mode: "terminal" | "files" | "containers" | "database" | "storage") => void;
   onOpenFiles?: () => void;
   onOpenContainers?: () => void;
   onOpenDatabase?: () => void;
+  onOpenStorage?: () => void;
   servers: Map<number, Server>;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
@@ -66,6 +67,7 @@ export function TabBar({
   onOpenFiles,
   onOpenContainers,
   onOpenDatabase,
+  onOpenStorage,
   servers,
   onSelect,
   onClose,
@@ -185,6 +187,19 @@ export function TabBar({
             >
               <Icon name="database" size={13} />
               <span>Database</span>
+            </button>
+          )}
+          {onOpenStorage && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === "storage"}
+              className={`workspace-mode-btn${workspaceMode === "storage" ? " is-active" : ""}`}
+              onClick={onOpenStorage}
+              title="Buka Object Storage (S3, Cloudflare R2, MinIO)"
+            >
+              <Icon name="cloud" size={13} />
+              <span>Storage</span>
             </button>
           )}
         </div>

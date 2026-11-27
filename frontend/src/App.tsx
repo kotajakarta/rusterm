@@ -58,6 +58,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { ConfigBackupDialog } from "./components/ConfigBackupDialog";
 import { ContainersView } from "./components/containers/ContainersView";
 import { DbWorkspace } from "./components/db/DbWorkspace";
+import { StorageWorkspace } from "./components/storage/StorageWorkspace";
 import { FilesView } from "./components/files/FilesView";
 import { Icon } from "./components/Icon";
 import { MobileKeyBar } from "./components/MobileKeyBar";
@@ -148,7 +149,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
     return normalizeIdleLockMinutes(readString(IDLE_LOCK_KEY));
   });
   const lastActiveRef = useRef<number>(Date.now());
-  const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers" | "database">("terminal");
+  const [workspaceMode, setWorkspaceMode] = useState<"terminal" | "files" | "containers" | "database" | "storage">("terminal");
   const [pendingDbPrefill, setPendingDbPrefill] = useState<DbConnectionPrefill | null>(null);
   const [filesTargetReq, setFilesTargetReq] = useState<{
     serverId: number;
@@ -1057,6 +1058,7 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
           onOpenFiles={() => openFileManager()}
           onOpenContainers={() => openContainers()}
           onOpenDatabase={() => openDatabase()}
+          onOpenStorage={() => setWorkspaceMode("storage")}
           servers={serverMap}
           onSelect={selectTab}
           onClose={closeTab}
@@ -1115,6 +1117,8 @@ export function App({ onLock }: { onLock: () => Promise<void> }) {
             onPrefillConsumed={() => setPendingDbPrefill(null)}
           />
         )}
+
+        {workspaceMode === "storage" && <StorageWorkspace servers={servers} />}
 
         {tabs.length > 0 ? (
           <div

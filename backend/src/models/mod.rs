@@ -7,3 +7,4 @@ pub mod containers;
 pub mod cloudflare;
 pub mod tailscale;
 pub mod db_client;
+pub mod storage;

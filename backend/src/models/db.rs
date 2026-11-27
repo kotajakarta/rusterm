@@ -7,9 +7,12 @@ use crate::models::tailscale::TailscaleAccount;
 use crate::models::files::{FileRemote, FileRemoteInput};
 use crate::models::server::{
     BackupBookmark, BackupDbConnection, BackupPayload, BackupServer, BackupSnippet, BackupStats,
-    DecryptedServerCreds, ServerInput, ServerOutput,
+    BackupStorageAccount, DecryptedServerCreds, ServerInput, ServerOutput,
 };
 use crate::models::snippet::{Snippet, SnippetInput};
+use crate::models::storage::{
+    DecryptedStorageAccount, StorageAccountInput, StorageAccountOutput, StorageAccountUpdateInput,
+};
 use crate::services::crypto::CryptoService;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -125,6 +128,20 @@ impl DbStore {
                 ssh_server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
                 read_only INTEGER NOT NULL DEFAULT 0,
                 color TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS storage_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 's3',
+                endpoint TEXT NOT NULL,
+                region TEXT NOT NULL DEFAULT 'us-east-1',
+                access_key_id TEXT NOT NULL,
+                secret_access_key TEXT NOT NULL,
+                default_bucket TEXT NOT NULL DEFAULT '',
+                path_style INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -579,6 +596,26 @@ impl DbStore {
             )?;
         }
 
+        let mut st_stmt = tx.prepare("SELECT id, secret_access_key FROM storage_accounts")?;
+        let st_rows: Vec<(i64, String)> = st_stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(st_stmt);
+
+        for (id, enc_secret) in st_rows {
+            if !enc_secret.is_empty() {
+                let decrypted = CryptoService::decrypt(&enc_secret, old_kek)
+                    .map_err(|e| DbError::Crypto(e.to_string()))?;
+                let new_enc = CryptoService::encrypt(&decrypted, new_kek)
+                    .map_err(|e| DbError::Crypto(e.to_string()))?;
+                tx.execute(
+                    "UPDATE storage_accounts SET secret_access_key = ?1 WHERE id = ?2",
+                    params![new_enc, id],
+                )?;
+            }
+        }
+
         tx.commit()?;
         Ok(())
     }
@@ -657,11 +694,27 @@ impl DbStore {
             });
         }
 
+        let mut backup_storage_accounts = Vec::new();
+        for sa in self.list_storage_accounts()? {
+            let dec = self.get_storage_account_decrypted(sa.id, kek)?;
+            backup_storage_accounts.push(BackupStorageAccount {
+                name: dec.name,
+                provider: dec.provider,
+                endpoint: dec.endpoint,
+                region: dec.region,
+                access_key_id: dec.access_key_id,
+                secret_access_key: dec.secret_access_key,
+                default_bucket: dec.default_bucket,
+                path_style: dec.path_style,
+            });
+        }
+
         Ok(BackupPayload {
             version: 1,
             servers: backup_servers,
             snippets,
             db_connections: backup_db_conns,
+            storage_accounts: backup_storage_accounts,
         })
     }
 
@@ -766,6 +819,42 @@ impl DbStore {
                 } else {
                     self.create_db_connection(&input, kek)?;
                     stats.db_connections_added += 1;
+                }
+            }
+        }
+
+        if !payload.storage_accounts.is_empty() {
+            let existing_storage = self.list_storage_accounts()?;
+            for sa in &payload.storage_accounts {
+                if let Some(ex) = existing_storage
+                    .iter()
+                    .find(|s| s.name == sa.name && s.endpoint == sa.endpoint)
+                {
+                    let upd = StorageAccountUpdateInput {
+                        name: sa.name.clone(),
+                        provider: sa.provider.clone(),
+                        endpoint: sa.endpoint.clone(),
+                        region: sa.region.clone(),
+                        access_key_id: sa.access_key_id.clone(),
+                        secret_access_key: Some(sa.secret_access_key.clone()),
+                        default_bucket: sa.default_bucket.clone(),
+                        path_style: sa.path_style,
+                    };
+                    self.update_storage_account(ex.id, &upd, kek)?;
+                    stats.storage_accounts_updated += 1;
+                } else {
+                    let inp = StorageAccountInput {
+                        name: sa.name.clone(),
+                        provider: sa.provider.clone(),
+                        endpoint: sa.endpoint.clone(),
+                        region: sa.region.clone(),
+                        access_key_id: sa.access_key_id.clone(),
+                        secret_access_key: sa.secret_access_key.clone(),
+                        default_bucket: sa.default_bucket.clone(),
+                        path_style: sa.path_style,
+                    };
+                    self.create_storage_account(&inp, kek)?;
+                    stats.storage_accounts_added += 1;
                 }
             }
         }
@@ -1451,6 +1540,200 @@ impl DbStore {
     pub fn delete_db_connection(&self, id: i64) -> Result<(), DbError> {
         let conn = self.pool.get()?;
         let count = conn.execute("DELETE FROM db_connections WHERE id = ?1", params![id])?;
+        if count == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub fn list_storage_accounts(&self) -> Result<Vec<StorageAccountOutput>, DbError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, provider, endpoint, region, access_key_id,
+                    secret_access_key != '', default_bucket, path_style, created_at
+             FROM storage_accounts
+             ORDER BY sort_order ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let path_style_int: i64 = row.get(8)?;
+            Ok(StorageAccountOutput {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                provider: row.get(2)?,
+                endpoint: row.get(3)?,
+                region: row.get(4)?,
+                access_key_id: row.get(5)?,
+                has_secret: row.get(6)?,
+                default_bucket: row.get(7)?,
+                path_style: path_style_int != 0,
+                created_at: row.get(9)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for item in rows {
+            out.push(item?);
+        }
+        Ok(out)
+    }
+
+    pub fn get_storage_account(&self, id: i64) -> Result<StorageAccountOutput, DbError> {
+        let conn = self.pool.get()?;
+        conn.query_row(
+            "SELECT id, name, provider, endpoint, region, access_key_id,
+                    secret_access_key != '', default_bucket, path_style, created_at
+             FROM storage_accounts
+             WHERE id = ?1",
+            params![id],
+            |row| {
+                let path_style_int: i64 = row.get(8)?;
+                Ok(StorageAccountOutput {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    provider: row.get(2)?,
+                    endpoint: row.get(3)?,
+                    region: row.get(4)?,
+                    access_key_id: row.get(5)?,
+                    has_secret: row.get(6)?,
+                    default_bucket: row.get(7)?,
+                    path_style: path_style_int != 0,
+                    created_at: row.get(9)?,
+                })
+            },
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => DbError::NotFound,
+            other => DbError::Sqlite(other),
+        })
+    }
+
+    pub fn get_storage_account_decrypted(
+        &self,
+        id: i64,
+        kek: &[u8; 32],
+    ) -> Result<DecryptedStorageAccount, DbError> {
+        let conn = self.pool.get()?;
+        #[allow(clippy::type_complexity)]
+        let row: (i64, String, String, String, String, String, String, String, i64) = conn
+            .query_row(
+                "SELECT id, name, provider, endpoint, region, access_key_id,
+                        secret_access_key, default_bucket, path_style
+                 FROM storage_accounts
+                 WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => DbError::NotFound,
+                other => DbError::Sqlite(other),
+            })?;
+
+        let plain_secret = if row.6.is_empty() {
+            String::new()
+        } else {
+            let bytes = CryptoService::decrypt(&row.6, kek)
+                .map_err(|e| DbError::Crypto(e.to_string()))?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+
+        Ok(DecryptedStorageAccount {
+            id: row.0,
+            name: row.1,
+            provider: row.2,
+            endpoint: row.3,
+            region: row.4,
+            access_key_id: row.5,
+            secret_access_key: plain_secret,
+            default_bucket: row.7,
+            path_style: row.8 != 0,
+        })
+    }
+
+    pub fn create_storage_account(
+        &self,
+        input: &StorageAccountInput,
+        kek: &[u8; 32],
+    ) -> Result<i64, DbError> {
+        let conn = self.pool.get()?;
+        let enc_secret = CryptoService::encrypt(input.secret_access_key.as_bytes(), kek)
+            .map_err(|e| DbError::Crypto(e.to_string()))?;
+        conn.execute(
+            r#"INSERT INTO storage_accounts
+               (name, provider, endpoint, region, access_key_id, secret_access_key, default_bucket, path_style)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+            params![
+                input.name.trim(),
+                input.provider.trim(),
+                input.endpoint.trim().trim_end_matches('/'),
+                input.region.trim(),
+                input.access_key_id.trim(),
+                enc_secret,
+                input.default_bucket.trim(),
+                if input.path_style { 1i64 } else { 0i64 },
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn update_storage_account(
+        &self,
+        id: i64,
+        input: &StorageAccountUpdateInput,
+        kek: &[u8; 32],
+    ) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let existing_secret: String = conn
+            .query_row(
+                "SELECT secret_access_key FROM storage_accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => DbError::NotFound,
+                other => DbError::Sqlite(other),
+            })?;
+
+        let enc_secret = match &input.secret_access_key {
+            Some(s) if !s.is_empty() => CryptoService::encrypt(s.as_bytes(), kek)
+                .map_err(|e| DbError::Crypto(e.to_string()))?,
+            _ => existing_secret,
+        };
+
+        conn.execute(
+            r#"UPDATE storage_accounts
+               SET name = ?1, provider = ?2, endpoint = ?3, region = ?4,
+                   access_key_id = ?5, secret_access_key = ?6,
+                   default_bucket = ?7, path_style = ?8
+               WHERE id = ?9"#,
+            params![
+                input.name.trim(),
+                input.provider.trim(),
+                input.endpoint.trim().trim_end_matches('/'),
+                input.region.trim(),
+                input.access_key_id.trim(),
+                enc_secret,
+                input.default_bucket.trim(),
+                if input.path_style { 1i64 } else { 0i64 },
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_storage_account(&self, id: i64) -> Result<(), DbError> {
+        let conn = self.pool.get()?;
+        let count = conn.execute("DELETE FROM storage_accounts WHERE id = ?1", params![id])?;
         if count == 0 {
             return Err(DbError::NotFound);
         }
